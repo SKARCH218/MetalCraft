@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "metalcraft",
+  "version": "${version}",
+  "name": "MetalCraft",
+  "description": "",
+  "authors": [],
+  "contact": {},
+  "license": "MIT",
+  "icon": "assets/metalcraft/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.skarch.metalcraft.MetalCraftClient"
+    ]
+  },
+  "mixins": [
+    {
+      "config": "metalcraft.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric-language-kotlin": ">=${kotlin_loader_version}",
+    "fabric-api": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}
