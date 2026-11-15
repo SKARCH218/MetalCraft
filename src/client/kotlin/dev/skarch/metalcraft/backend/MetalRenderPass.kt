@@ -36,6 +36,9 @@ internal class MetalRenderPass(private val device: MetalDevice, private val enco
     private var bindingsDirty = false
     private var debugGroups = 0
 
+    // Set while the selected game pipeline has no counterpart in the active shader pack: its draws are dropped.
+    private var skipDraws = false
+
     private var areaX = 0
     private var areaY = 0
     private var areaWidth = 0
@@ -67,6 +70,7 @@ internal class MetalRenderPass(private val device: MetalDevice, private val enco
         textureViews.clear()
         samplers.clear()
         pipeline = null
+        skipDraws = false
         indexBuffer = null
         bindingsDirty = false
         debugGroups = 0
@@ -83,7 +87,15 @@ internal class MetalRenderPass(private val device: MetalDevice, private val enco
 
     override fun setPipeline(pipeline: RenderPipeline) {
         // An active shader pack replaces some of the game's pipelines with its own programs.
-        val replacement = ShaderPipeline.substitute(pipeline, extraTargets != null)
+        // Pack programs for a pipeline are built the first time the game uses it, which can fail.
+        val replacement = try {
+            ShaderPipeline.substitute(pipeline, extraTargets != null)
+        } catch (e: Exception) {
+            ShaderPipeline.programFailed(e)
+            null
+        }
+        skipDraws = replacement == null && extraTargets != null && ShaderPipeline.hidesGameDraws()
+        if (skipDraws) return
         if (replacement != null) {
             try {
                 setProgram(replacement)
@@ -167,6 +179,7 @@ internal class MetalRenderPass(private val device: MetalDevice, private val enco
     }
 
     override fun drawIndexed(indexCount: Int, instanceCount: Int, firstIndex: Int, vertexOffset: Int, firstInstance: Int) {
+        if (skipDraws) return
         val pipeline = readyPipeline()
         val indices = checkNotNull(indexBuffer) { "No index buffer is set" }
         val indexSize = if (wideIndices != 0) 4L else 2L
@@ -181,6 +194,7 @@ internal class MetalRenderPass(private val device: MetalDevice, private val enco
     }
 
     override fun draw(vertexCount: Int, instanceCount: Int, firstVertex: Int, firstInstance: Int) {
+        if (skipDraws) return
         val pipeline = pipeline
         if (pipeline == null || !pipeline.isUsable()) return
         pushBindings(pipeline)
@@ -223,6 +237,7 @@ internal class MetalRenderPass(private val device: MetalDevice, private val enco
         draws: Collection<RenderPass.Draw<T>>, defaultIndexBuffer: GpuBuffer?, defaultIndexType: IndexType?,
         dynamicUniforms: Collection<String>, uniformArgument: T,
     ) {
+        if (skipDraws) return
         for (draw in draws) {
             draw.uniformUploaderConsumer()?.accept(uniformArgument, uniformUploader)
             val indices = draw.indexBuffer() ?: checkNotNull(defaultIndexBuffer) { "Draw has no index buffer" }

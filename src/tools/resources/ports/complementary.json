@@ -1,0 +1,30 @@
+{
+  "name": "Complementary Reimagined r5.9.3",
+  "scales": {
+    "colortex1": 0.5,
+    "colortex7": 0.5
+  },
+  "textures": {
+    "noisetex": {
+      "file": "lib/textures/noise.png",
+      "repeat": true
+    },
+    "deferred.colortex3": {
+      "file": "lib/textures/cloud-water.png",
+      "repeat": true
+    },
+    "gbuffers.gaux4": {
+      "file": "lib/textures/cloud-water.png",
+      "repeat": true
+    }
+  },
+  "blend": {
+    "gbuffers_water": [
+      0,
+      3
+    ]
+  },
+  "alphaTest": {
+    "gbuffers_water": 0.0001
+  }
+}

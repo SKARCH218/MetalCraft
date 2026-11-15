@@ -367,7 +367,7 @@ object Upscaler {
                     val header = source("pack_header.metal") + "\n"
                     val program = PackProgram(
                         device, "metalcraft/motion", header + source("pack_fullscreen.vsh.metal"), header + source("upscale_motion.fsh.metal"),
-                        MOTION_ENTRIES, null, intArrayOf(MetalFormats.code(GpuFormat.RG16_FLOAT)), intArrayOf(15), false, -1, false, 0,
+                        MOTION_ENTRIES, null, intArrayOf(MetalFormats.code(GpuFormat.RG16_FLOAT)), intArrayOf(15), 0, -1, false, 0,
                     )
                     motionProgram = program
                     program.variant(MetalFormats.NO_FORMAT, null)

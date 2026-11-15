@@ -4,9 +4,13 @@
   "package": "dev.skarch.metalcraft.mixin",
   "compatibilityLevel": "JAVA_25",
   "client": [
+    "BufferBuilderMixin",
+    "ChunkSectionsToRenderMixin",
     "GameRendererMixin",
     "LevelRendererAccessor",
-    "MinecraftMixin"
+    "MinecraftMixin",
+    "RenderPipelinesMixin",
+    "SectionCompilerMixin"
   ],
   "injectors": {
     "defaultRequire": 1

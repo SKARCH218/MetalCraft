@@ -37,6 +37,8 @@ loom {
         named("client") {
             // FFM downcalls are restricted methods; mod classes live in the unnamed module under Knot.
             vmArg("--enable-native-access=ALL-UNNAMED")
+            // Ported shader packs live in the project folder (git-ignored), not in the game folder.
+            vmArg("-Dmetalcraft.shaderpacks.dir=${layout.projectDirectory.dir("shaderpacks").asFile}")
         }
     }
 }
@@ -60,6 +62,8 @@ val harnessProperties = listOf(
     "metalcraft.test.outputDir",
     "metalcraft.test.benchmark",
     "metalcraft.test.scenes",
+    "metalcraft.test.width",
+    "metalcraft.test.height",
     "metalcraft.test.worldCache",
     "metalcraft.debug.timing",
     "metalcraft.shaderpack",
@@ -74,13 +78,39 @@ loom {
     runs {
         named("clientGameTest") {
             vmArg("--enable-native-access=ALL-UNNAMED")
+            vmArg("-Dmetalcraft.shaderpacks.dir=${layout.projectDirectory.dir("shaderpacks").asFile}")
             // The gametest API pins the game framebuffer to these values regardless of the real window size.
-            programArgs("--width", "1920", "--height", "1200")
+            // -Pmetalcraft.test.width / height override the size, e.g. to measure at a display's full resolution.
+            programArgs(
+                "--width", providers.gradleProperty("metalcraft.test.width").orNull ?: "1920",
+                "--height", providers.gradleProperty("metalcraft.test.height").orNull ?: "1200",
+            )
             harnessProperties.forEach { name ->
                 providers.gradleProperty(name).orNull?.let { vmArg("-D$name=$it") }
             }
         }
     }
+}
+
+// Porting aid (CLAUDE.md section 4, M7): turns an Iris/OptiFine shader pack's GLSL into the Metal Shading Language
+// of a MetalCraft pack with the shaderc and SPIRV-Cross that ship with the game. Not part of the mod jar.
+//   ./gradlew convertShaderPack -Ppack.source=<pack>/shaders -Ppack.output=shaderpacks/<name> -Ppack.port=src/tools/resources/ports/<name>.json
+val tools: SourceSet by sourceSets.creating {
+    compileClasspath += sourceSets["client"].compileClasspath
+    runtimeClasspath += sourceSets["client"].runtimeClasspath
+}
+
+tasks.register<JavaExec>("convertShaderPack") {
+    group = "metalcraft"
+    description = "Converts a GLSL shader pack into a MetalCraft pack (porting aid)."
+    classpath = tools.runtimeClasspath
+    mainClass.set("dev.skarch.metalcraft.tools.ShaderPackConverterKt")
+    workingDir = layout.projectDirectory.asFile
+    args(
+        providers.gradleProperty("pack.source").orNull ?: "",
+        providers.gradleProperty("pack.output").orNull ?: "",
+        providers.gradleProperty("pack.port").orNull ?: "",
+    )
 }
 
 val nativeDir = layout.projectDirectory.dir("native")

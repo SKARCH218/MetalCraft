@@ -178,6 +178,14 @@ internal class MetalDevice(private val defaultShaderSource: ShaderSource) : GpuD
         return MetalSampler(this, handleOut.get(JAVA_LONG, 0), addressModeU, addressModeV, minFilter, magFilter, maxAnisotropy, maxLod)
     }
 
+    /** A linear sampler that compares against the stored depth (less or equal), for shadow maps. */
+    fun createShadowSampler(): MetalSampler {
+        Mcn.check(Mcn.shadowSamplerCreate.invokeExact(context, handleOut) as Int)
+        return MetalSampler(
+            this, handleOut.get(JAVA_LONG, 0), AddressMode.CLAMP_TO_EDGE, AddressMode.CLAMP_TO_EDGE, FilterMode.LINEAR, FilterMode.LINEAR, 1, OptionalDouble.of(0.0),
+        )
+    }
+
     // ---- pipelines --------------------------------------------------------------------------------------
 
     private data class ShaderKey(val id: Identifier, val type: ShaderType, val defines: ShaderDefines)

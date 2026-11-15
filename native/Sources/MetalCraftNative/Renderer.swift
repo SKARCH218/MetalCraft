@@ -412,19 +412,39 @@ public func mcn_sampler_create(
     }
 }
 
+/// A sampler for shadow maps read with `sample_compare`: linear filtering of "is this depth <= the stored one".
+@_cdecl("mcn_shadow_sampler_create")
+public func mcn_shadow_sampler_create(_ handle: Int, _ outSampler: UnsafeMutablePointer<Int>?) -> Int32 {
+    guarded {
+        guard let outSampler else { throw SurfaceError("mcn_shadow_sampler_create: output pointer is null") }
+        let descriptor = MTLSamplerDescriptor()
+        descriptor.sAddressMode = .clampToEdge
+        descriptor.tAddressMode = .clampToEdge
+        descriptor.minFilter = .linear
+        descriptor.magFilter = .linear
+        descriptor.compareFunction = .lessEqual
+        guard let sampler = context(handle).device.makeSamplerState(descriptor: descriptor) else {
+            throw SurfaceError("Could not create a shadow sampler")
+        }
+        outSampler.pointee = retained(sampler)
+    }
+}
+
 // MARK: - Pipelines
 
 /// Compiles MSL sources whose entry points are both called `main0`. Fails if Metal rejects either one.
 @_cdecl("mcn_shader_pair_create")
 public func mcn_shader_pair_create(
-    _ handle: Int, _ vertexSource: UnsafePointer<CChar>?, _ fragmentSource: UnsafePointer<CChar>?, _ outPair: UnsafeMutablePointer<Int>?
+    _ handle: Int, _ vertexSource: UnsafePointer<CChar>?, _ fragmentSource: UnsafePointer<CChar>?, _ fastMath: Int32,
+    _ outPair: UnsafeMutablePointer<Int>?
 ) -> Int32 {
     guarded(MCN_ERR_SHADER) {
         guard let vertexSource, let fragmentSource, let outPair else { throw SurfaceError("mcn_shader_pair_create: a required pointer is null") }
         let device = context(handle).device
         let options = MTLCompileOptions()
-        // Fast math lets the compiler reorder floating point, which shows up as z-fighting between passes.
-        options.fastMathEnabled = false
+        // Fast math lets the compiler reorder floating point, which shows up as z-fighting between passes
+        // of the game's own shaders. Shader pack programs ask for it: they are far heavier and tolerate it.
+        options.fastMathEnabled = fastMath != 0
         let vertexLibrary = try device.makeLibrary(source: String(cString: vertexSource), options: options)
         let fragmentLibrary = try device.makeLibrary(source: String(cString: fragmentSource), options: options)
         guard let vertexFunction = vertexLibrary.makeFunction(name: "main0"),

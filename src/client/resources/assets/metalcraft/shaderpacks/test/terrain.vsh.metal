@@ -14,6 +14,7 @@ vertex TerrainVarying main0(
     out.uv = in.UV0;
     out.blockLight = clamp(float(in.UV2.x) / 240.0, 0.0, 1.0);
     out.relative = relative;
+    out.normal = in.McNormal.xyz;
     out.sphericalDistance = length(relative);
     out.cylindricalDistance = max(length(relative.xz), abs(relative.y));
     return out;

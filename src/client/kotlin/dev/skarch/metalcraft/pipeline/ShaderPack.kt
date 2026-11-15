@@ -28,6 +28,7 @@ internal class PassSpec(val stage: String, val fragment: String, val inputs: Lis
  *   "buffers": { "colortex1": { "format": "RGBA16F", "scale": 1.0 } },
  *   "gbuffers": ["colortex1"],                           // extra outputs of the gbuffers programs, after colortex0
  *   "shadow": { "resolution": 2048, "distance": 96 },
+ *   "blockIds": "blocks.properties",                     // optional: IDs for mc_Entity, see BlockIds
  *   "programs": {
  *     "shadow":           { "vertex": "shadow.vsh.metal", "fragment": "shadow.fsh.metal" },
  *     "gbuffers_terrain": { "vertex": "terrain.vsh.metal", "fragment": "terrain.fsh.metal" }
@@ -40,8 +41,21 @@ internal class PassSpec(val stage: String, val fragment: String, val inputs: Lis
  * ```
  * Passes run in the order listed; `stage` is one of deferred, composite, final.
  */
-internal class ShaderPack private constructor(val id: String, private val root: Path, json: JsonObject) {
-    val displayName: String = json.get("name")?.asString ?: id
+internal class ShaderPack private constructor(val id: String, private val root: Path, private val manifest: JsonObject) {
+    /** True for a pack written by the GLSL converter (`"format": 2`); the fields below are then unused. */
+    val isConverted: Boolean = manifest.get("format")?.asInt == 2
+    private val json: JsonObject = if (isConverted) JsonObject() else manifest
+    private val convertedSpecs = HashMap<String, ConvertedSpec>()
+
+    init {
+        // Reading the default dimension now rejects a broken manifest while packs are listed.
+        if (isConverted) converted("world0")
+    }
+
+    /** The converted pack's programs for a dimension folder (`world0`, `world-1`, `world1`). */
+    fun converted(dimension: String): ConvertedSpec = convertedSpecs.getOrPut(dimension) { ConvertedSpec(manifest, dimension) }
+
+    val displayName: String = manifest.get("name")?.asString ?: id
     val includes: List<String> = json.getAsJsonArray("include")?.map { it.asString } ?: emptyList()
     val buffers: Map<String, BufferSpec>
     val gbufferTargets: List<String> = json.getAsJsonArray("gbuffers")?.map { it.asString } ?: emptyList()
@@ -50,6 +64,9 @@ internal class ShaderPack private constructor(val id: String, private val root: 
     val shadow: ProgramFiles?
     val terrain: ProgramFiles?
     val passes: List<PassSpec>
+
+    /** File with the pack's block IDs (see [BlockIds]), or null. */
+    val blockIdsFile: String? = manifest.get("blockIds")?.asString
 
     init {
         val declared = LinkedHashMap<String, BufferSpec>()
@@ -100,10 +117,13 @@ internal class ShaderPack private constructor(val id: String, private val root: 
     private fun programFiles(json: JsonObject) = ProgramFiles(json.get("vertex").asString, json.get("fragment").asString)
 
     /** Text of a file in the pack folder. */
-    fun read(file: String): String {
+    fun read(file: String): String = Files.readString(path(file))
+
+    /** A file in the pack folder. */
+    fun path(file: String): Path {
         val path = root.resolve(file).normalize()
         require(path.startsWith(root.normalize())) { "'$file' is outside the pack folder" }
-        return Files.readString(path)
+        return path
     }
 
     companion object {
@@ -132,7 +152,9 @@ internal class ShaderPack private constructor(val id: String, private val root: 
         fun discover(): List<ShaderPack> {
             val found = ArrayList<ShaderPack>()
             val builtIn = FabricLoader.getInstance().getModContainer(MetalCraft.MOD_ID).flatMap { it.findPath(BUILT_IN_ROOT) }.orElse(null)
-            for (root in listOfNotNull(builtIn, FabricLoader.getInstance().gameDir.resolve("shaderpacks"))) {
+            // Development runs point this at the project's own shaderpacks folder.
+            val extra = System.getProperty("metalcraft.shaderpacks.dir")?.takeIf { it.isNotBlank() }?.let(Path::of)
+            for (root in listOfNotNull(builtIn, FabricLoader.getInstance().gameDir.resolve("shaderpacks"), extra)) {
                 if (!Files.isDirectory(root)) continue
                 val folders = try {
                     Files.list(root).use { it.sorted().toList() }
@@ -155,6 +177,82 @@ internal class ShaderPack private constructor(val id: String, private val root: 
                 }
             }
             return found
+        }
+    }
+}
+
+/**
+ * The manifest of a pack produced by the GLSL converter (`src/tools`, CLAUDE.md section 4 M7). The converter
+ * writes it; see `ShaderPackConverter.kt` for the conventions of the programs it describes.
+ */
+internal class ConvertedSpec(json: JsonObject, dimension: String) {
+    // What differs between dimensions. A pack without programs for one uses those of the Overworld.
+    private val part: JsonObject = json.getAsJsonObject("dimensions").let { it.getAsJsonObject(dimension) ?: it.getAsJsonObject("world0") }
+
+    class Buffer(val index: Int, val format: GpuFormat, val clear: Boolean, val scale: Float)
+    class Texture(val name: String, val compare: Boolean)
+    class Program(
+        val name: String, val kind: String, val vertex: String, val fragment: String, val textures: List<Texture>,
+        val targets: IntArray, val blend: IntArray, val alphaTest: Float,
+    )
+    class Uniform(val name: String, val type: String, val offset: Int)
+    class Image(val file: String, val repeat: Boolean)
+
+    val buffers: Map<Int, Buffer> = json.getAsJsonObject("buffers").entrySet().associate { (name, value) ->
+        val index = name.removePrefix("colortex").toInt()
+        val buffer = value.asJsonObject
+        index to Buffer(index, format(buffer.get("format").asString), buffer.get("clear")?.asBoolean ?: true, buffer.get("scale")?.asFloat ?: 1f)
+    }
+    val gbuffers: IntArray = part.getAsJsonArray("gbuffers").map { it.asInt }.toIntArray()
+    val shadowResolution: Int = part.getAsJsonObject("shadow").get("resolution").asInt
+    val shadowDistance: Float = part.getAsJsonObject("shadow").get("distance").asFloat
+    val sunPathRotation: Float = part.getAsJsonObject("shadow").get("sunPathRotation").asFloat
+    val images: Map<String, Image> = json.getAsJsonObject("textures").entrySet().associate { (name, value) ->
+        name to Image(value.asJsonObject.get("file").asString, value.asJsonObject.get("repeat").asBoolean)
+    }
+    val passes: List<String> = part.getAsJsonArray("passes").map { it.asString }
+
+    /** The program that draws the sky as a full-screen pass before the world, or null. */
+    val sky: String? = part.get("sky")?.asString
+    val programs: Map<String, Program> = part.getAsJsonObject("programs").entrySet().associate { (name, value) ->
+        val program = value.asJsonObject
+        name to Program(
+            name, program.get("kind").asString, program.get("vertex").asString, program.get("fragment").asString,
+            program.getAsJsonArray("textures").map { Texture(it.asJsonObject.get("name").asString, it.asJsonObject.get("compare").asBoolean) },
+            program.getAsJsonArray("targets").map { it.asInt }.toIntArray(),
+            program.getAsJsonArray("blend")?.map { it.asInt }?.toIntArray() ?: IntArray(0),
+            program.get("alphaTest")?.asFloat ?: -1f,
+        )
+    }
+    val uniformBlockSize: Int = json.get("uniformBlockSize").asInt
+    val uniforms: List<Uniform> = json.getAsJsonArray("uniforms").map {
+        val uniform = it.asJsonObject
+        Uniform(uniform.get("name").asString, uniform.get("type").asString, uniform.get("offset").asInt)
+    }
+
+    init {
+        require(shadowResolution in 256..8192) { "Shadow resolution $shadowResolution is outside 256..8192" }
+        require(shadowDistance >= 8f && shadowDistance <= 1024f) { "Shadow distance $shadowDistance is outside 8..1024" }
+        require(uniformBlockSize in 16..65536) { "Uniform block size $uniformBlockSize is not plausible" }
+        require(gbuffers.size <= 7) { "At most 7 buffers can be written by the world programs" }
+        for (index in gbuffers) require(index in buffers) { "World programs write colortex$index, which is not declared" }
+    }
+
+    private companion object {
+        /** OpenGL names as packs write them. Metal has no three-channel formats, so those get a fourth. */
+        fun format(name: String): GpuFormat = when (name) {
+            "R11F_G11F_B10F" -> GpuFormat.RG11B10_FLOAT
+            "RGBA8", "RGB8" -> GpuFormat.RGBA8_UNORM
+            "RGBA8_SNORM", "RGB8_SNORM" -> GpuFormat.RGBA8_SNORM
+            "RGBA16F", "RGB16F" -> GpuFormat.RGBA16_FLOAT
+            "RGBA16", "RGB16" -> GpuFormat.RGBA16_UNORM
+            "RG16F" -> GpuFormat.RG16_FLOAT
+            "R16F" -> GpuFormat.R16_FLOAT
+            "R32F" -> GpuFormat.R32_FLOAT
+            "R8" -> GpuFormat.R8_UNORM
+            "RG8" -> GpuFormat.RG8_UNORM
+            "RGB10_A2" -> GpuFormat.RGB10A2_UNORM
+            else -> throw IllegalArgumentException("Unknown buffer format '$name'")
         }
     }
 }

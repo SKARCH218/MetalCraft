@@ -22,8 +22,8 @@ fragment TerrainOut main0(
     }
 #endif
 
-    // Terrain vertices carry no normal; the face normal follows from how the position changes on screen.
-    float3 normal = normalize(cross(dfdx(in.relative), dfdy(in.relative)));
+    // Faces drawn from both sides (grass, flowers) show the side that looks at the camera.
+    float3 normal = normalize(in.normal);
     if (dot(normal, in.relative) > 0.0) {
         normal = -normal;
     }

@@ -62,3 +62,44 @@ Device: Apple M1 Max. Commit: 94f2ada + local changes. Output: `run/test-output/
 | entities | 689.81 | 299.87 | 1.45 | 3.07 |
 | gui_inventory | 680.20 | 300.23 | 1.47 | 3.07 |
 | entities_fx | 670.45 | 291.65 | 1.49 | 3.13 |
+
+## 2026-11-15 22:01 · metal-complementary
+
+Device: Apple M1 Max. Commit: 956f29c + local changes. Output: `run/test-output/20261115-215924/metal-complementary`.
+
+| Scene | Avg FPS | 1% low FPS | Avg frame (ms) | p99 frame (ms) |
+|---|---:|---:|---:|---:|
+| plains_day | 58.29 | 45.37 | 17.15 | 21.36 |
+| nether | 89.23 | 80.17 | 11.21 | 12.11 |
+
+## 2026-11-15 22:03 · metal-complementary
+
+Device: Apple M1 Max. Commit: 956f29c + local changes. Output: `run/test-output/20261115-220156/metal-complementary`.
+
+| Scene | Avg FPS | 1% low FPS | Avg frame (ms) | p99 frame (ms) |
+|---|---:|---:|---:|---:|
+| plains_day | 58.08 | 45.91 | 17.22 | 21.26 |
+
+## 2026-11-15 22:04 · metal-complementary
+
+Device: Apple M1 Max. Commit: 956f29c + local changes. Output: `run/test-output/20261115-220341/metal-complementary`.
+
+| Scene | Avg FPS | 1% low FPS | Avg frame (ms) | p99 frame (ms) |
+|---|---:|---:|---:|---:|
+| plains_day | 58.15 | 45.61 | 17.20 | 21.09 |
+
+## 2026-11-15 22:06 · metal-complementary
+
+Device: Apple M1 Max. Commit: 956f29c + local changes. Output: `run/test-output/20261115-220538/metal-complementary`.
+
+| Scene | Avg FPS | 1% low FPS | Avg frame (ms) | p99 frame (ms) |
+|---|---:|---:|---:|---:|
+| plains_day | 58.03 | 44.58 | 17.23 | 21.38 |
+
+## 2026-11-15 22:08 · metal-complementary
+
+Device: Apple M1 Max. Commit: 956f29c + local changes. Output: `run/test-output/20261115-220710/metal-complementary`.
+
+| Scene | Avg FPS | 1% low FPS | Avg frame (ms) | p99 frame (ms) |
+|---|---:|---:|---:|---:|
+| plains_day | 58.05 | 46.49 | 17.23 | 21.07 |

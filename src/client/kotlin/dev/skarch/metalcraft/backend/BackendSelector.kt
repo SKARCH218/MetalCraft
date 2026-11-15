@@ -32,21 +32,30 @@ object BackendSelector {
         }
     }
 
+    /** Whether this run starts on Metal: asked for by the property or the config, and Sodium is not in the way. */
+    @JvmStatic
+    fun metalRequested(): Boolean = metalRequested
+
+    private val metalRequested: Boolean by lazy {
+        val requested = System.getProperty(PROPERTY)?.trim()?.lowercase()
+        val useMetal = if (requested != null) requested == "metal" else MetalCraftConfig.useMetalRenderer
+        // Sodium 0.9 draws chunks with its own OpenGL or Vulkan calls, not through Blaze3D, so it cannot run
+        // on another backend. Starting Metal next to it would crash on the first frame.
+        if (useMetal && FabricLoader.getInstance().isModLoaded("sodium")) {
+            LOGGER.warn("Sodium is installed and only supports Minecraft's OpenGL and Vulkan renderers. The Metal renderer stays off")
+            false
+        } else {
+            useMetal
+        }
+    }
+
     /**
      * Called once from the `Minecraft` constructor with the backends the game is about to try, in order.
      * Metal goes first; if it cannot start, the game moves on to the rest of the list.
      */
     @JvmStatic
     fun backendsToTry(original: Array<GpuBackend>): Array<GpuBackend> {
-        val requested = System.getProperty(PROPERTY)?.trim()?.lowercase()
-        val useMetal = if (requested != null) requested == "metal" else MetalCraftConfig.useMetalRenderer
-        if (!useMetal) return original
-        // Sodium 0.9 draws chunks with its own OpenGL or Vulkan calls, not through Blaze3D, so it cannot run
-        // on another backend. Starting Metal next to it would crash on the first frame.
-        if (FabricLoader.getInstance().isModLoaded("sodium")) {
-            LOGGER.warn("Sodium is installed and only supports Minecraft's OpenGL and Vulkan renderers. The Metal renderer stays off")
-            return original
-        }
+        if (!metalRequested()) return original
         LOGGER.info("Starting on the Metal renderer")
         return arrayOf<GpuBackend>(MetalBackend(), *original)
     }

@@ -40,12 +40,19 @@ internal class PackProgram(
     private val colorFormats: IntArray,
     /** Metal colour write mask per output (15 = all, 0 = leave the target alone). */
     private val writeMasks: IntArray,
-    /** Blend the first output over what is there (straight alpha). */
-    private val blendFirst: Boolean,
+    /** Bit i set: output i is blended over what is there (straight alpha). */
+    private val blendMask: Int,
     /** Metal compare function for the depth test, or -1 for a program that ignores depth. */
     private val depthCompare: Int,
     private val depthWrite: Boolean,
     override val cull: Int,
+    /**
+     * How blended outputs are combined: colour operation, alpha operation, then source and destination factors
+     * for colour and for alpha (Metal codes). Null for straight alpha.
+     */
+    private val blendFunction: IntArray? = null,
+    /** Lets Metal's compiler reorder floating point arithmetic: faster, results not bit-exact between programs. */
+    fastMath: Boolean = false,
 ) : DrawProgram {
     override val primitive: Int = MetalFormats.PRIMITIVE_TRIANGLE
     override val wireframe: Int = 0
@@ -58,7 +65,7 @@ internal class PackProgram(
     init {
         Arena.ofConfined().use { arena ->
             val out = arena.allocate(JAVA_LONG)
-            Mcn.check(Mcn.shaderPairCreate.invokeExact(device.context, arena.allocateFrom(vertexMsl), arena.allocateFrom(fragmentMsl), out) as Int)
+            Mcn.check(Mcn.shaderPairCreate.invokeExact(device.context, arena.allocateFrom(vertexMsl), arena.allocateFrom(fragmentMsl), if (fastMath) 1 else 0, out) as Int)
             shaderPair = out.get(JAVA_LONG, 0)
         }
     }
@@ -87,16 +94,12 @@ internal class PackProgram(
         val layout = ArrayList<Int>(48)
         layout.add(colorFormats.size)
         for (i in colorFormats.indices) {
-            val blend = blendFirst && i == 0
+            val blend = blendMask and (1 shl i) != 0
             layout.add(colorFormats[i])
             layout.add(writeMasks[i])
             layout.add(if (blend) 1 else 0)
-            layout.add(BLEND_ADD)
-            layout.add(BLEND_ADD)
-            layout.add(if (blend) FACTOR_SRC_ALPHA else 0)
-            layout.add(if (blend) FACTOR_ONE_MINUS_SRC_ALPHA else 0)
-            layout.add(if (blend) FACTOR_ONE else 0)
-            layout.add(if (blend) FACTOR_ONE_MINUS_SRC_ALPHA else 0)
+            val function = if (blend) blendFunction ?: STRAIGHT_ALPHA else NO_BLEND
+            for (value in function) layout.add(value)
         }
         layout.add(depthFormat)
         layout.add(if (depthCompare >= 0) depthCompare else COMPARE_ALWAYS)
@@ -134,5 +137,7 @@ internal class PackProgram(
         const val FACTOR_ONE = 1
         const val FACTOR_SRC_ALPHA = 4
         const val FACTOR_ONE_MINUS_SRC_ALPHA = 5
+        val STRAIGHT_ALPHA = intArrayOf(BLEND_ADD, BLEND_ADD, FACTOR_SRC_ALPHA, FACTOR_ONE_MINUS_SRC_ALPHA, FACTOR_ONE, FACTOR_ONE_MINUS_SRC_ALPHA)
+        val NO_BLEND = intArrayOf(BLEND_ADD, BLEND_ADD, 0, 0, 0, 0)
     }
 }

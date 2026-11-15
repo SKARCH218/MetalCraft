@@ -154,6 +154,9 @@ scripts/run-tests.sh --save-baseline      # 이번 실행을 기준 세트(run/t
 scripts/run-tests.sh --shaderpack test    # Metal + 쉐이더팩으로 실행 (결과와 기준 폴더는 metal-<팩 이름>)
 scripts/run-tests.sh --upscale temporal --render-scale 67   # Metal + MetalFX (spatial | temporal, 결과 폴더 metal-temporal67)
 scripts/run-tests.sh --sodium             # Sodium을 넣고 실행 (호환성 확인용, 결과 폴더는 <backend>-sodium)
+
+# 쉐이더팩 GLSL → MetalCraft 팩 변환 (포팅 보조 도구, M7)
+./gradlew convertShaderPack -Ppack.source=shaderpacks/_original/<팩>/shaders -Ppack.output=shaderpacks/<이름> -Ppack.port=src/tools/resources/ports/<이름>.json
 ```
 
 자동 테스트가 도는 동안 게임 창을 닫거나 Cmd+Q를 누르면 실행이 실패로 끝난다.
@@ -221,6 +224,15 @@ run/test-output/<날짜-시간>/<backend>/
 - 업스케일링 중에는 월드를 작은 이미지에 그린다. 백엔드가 게임의 메인 색·깊이 이미지로 가는 패스와 클리어를 작은 이미지로 돌려 보내고(`Upscaler.redirect`), 월드와 쉐이더팩 패스가 끝나면 MetalFX가 메인 이미지로 키운다. 손과 GUI는 그 뒤에 원래 해상도로 그려진다.
 - 시간 모드는 프로젝션에 서브픽셀 지터를 넣고, 깊이와 카메라 이동으로 모션 이미지를 만든다(`upscale_motion.fsh.metal`). 지터와 모션의 부호는 실험으로 정했다(원본 해상도와의 차이, 회전 중 프레임의 선명도).
 - M5에서 아직 없는 것: 스스로 움직이는 것(엔티티, 이후 Create 장치)의 모션 벡터, 프레임 보간, 게임 내 설정 화면.
+- M7 상태(Complementary 포팅 진행 중, 브랜치 `m7-complementary`): 팩의 GLSL은 변환기(`src/tools/.../ShaderPackConverter.kt`, 게임에 든 shaderc + SPIRV-Cross 사용, 모드 jar에는 안 들어감)로 MSL로 바꾼다. 팩 옵션은 기본값으로 고정한다. 변환 결과는 `shaderpacks/<이름>/`(git 제외)에 `pack.json`(`"format": 2`) + `.metal` + `blocks.properties`로 나오고, 중간 GLSL은 `_glsl/`에 남는다. 팩마다 손으로 정하는 설정은 `src/tools/resources/ports/<이름>.json`(버퍼 크기 비율, 이미지 텍스처, 블렌딩, 알파 테스트).
+- 변환된 팩은 `pipeline/ConvertedPack.kt`가 돌린다. 팩의 OpenGL 규약(깊이 0=near, 느슨한 uniform, 그림자 행렬 방향)을 엔진이 맞춰 준다: uniform은 `PackUniforms` 블록 하나(이름과 오프셋은 `pack.json`), 그리기 종류별 값은 `DrawUniforms`(알파 테스트), 게임 깊이는 `1 - 깊이`로 복사해 depthtex0/1로 준다. 월드 프로그램은 게임 이미지 뒤에 붙인 팩 버퍼에만 쓰고, 팩 프로그램이 없는 게임 파이프라인은 그리지 않는다.
+- 지형 정점은 Metal 사용 중 48바이트로 늘어난다(`pipeline/TerrainVertexFormat.kt`: 법선, 탄젠트, 블록 ID, 텍스처 중심). 블록 ID 표는 `pipeline/BlockIds.kt`.
+- 개발 실행은 `-Dmetalcraft.shaderpacks.dir=<프로젝트>/shaderpacks`로 프로젝트의 `shaderpacks/`도 팩 폴더로 본다(`runClient`, 자동 테스트 모두).
+- 변환기는 팩의 `world0`(오버월드 및 기타), `world-1`(네더), `world1`(엔드) 프로그램을 각각 변환하고, 엔진은 차원이 바뀌면 해당 세트로 다시 로딩한다. 지형(`gbuffers_terrain`, `gbuffers_water`), 엔티티·아이템(`gbuffers_entities`), 파티클(`gbuffers_textured`), 해·달(`gbuffers_skytextured`), 하늘(`gbuffers_skybasic`, 월드 전에 전체화면 패스로 실행), 그림자, deferred·composite·final이 팩 프로그램으로 돈다. 게임 파이프라인과 팩 프로그램의 대응은 `ConvertedPack.createSubstitute`에 있다.
+- 성능(M1 Max, Complementary 기본 설정): 1920×1200에서 평원 약 168 FPS, 바다 약 139 FPS, 네더 약 184 FPS. 5120×2644에서 평원 약 41, 바다 약 33 FPS(같은 기기의 Iris는 다른 장면에서 약 23 FPS). 팩 프로그램은 Metal 컴파일 때 fast-math를 켠다(`PackProgram`의 `fastMath`). 끄면 3배쯤 느리다. 게임 자체 셰이더는 패스 사이 z-fighting 때문에 계속 끈다. 엔진의 CPU 시간은 프레임당 2ms 미만이다. 변환 시 SPIR-V 최적화는 효과가 없어 읽기 쉬운 비최적화 출력을 쓴다.
+- 측정용으로 `-Pmetalcraft.test.width=<w> -Pmetalcraft.test.height=<h>`(환경변수 `ORG_GRADLE_PROJECT_...`)로 자동 테스트의 화면 크기를 바꿀 수 있다. 기준 세트는 1920×1200이다.
+- 자동 테스트의 팩 끄기/켜기는 K 키를 원하는 팩이 될 때까지 누른다(팩이 여러 개 설치돼 있어도 동작).
+- M7에서 아직 없는 것: 엔티티·반투명 그림자, 손(게임이 팩 뒤에 자체 셰이더로 그림), 날씨·선·번개·신호기 빔·글린트 등 나머지 팩 프로그램, 엔티티별 uniform(entityId, entityColor 등)과 손에 든 아이템 uniform(로그에 목록이 남는다), 팩 옵션, 원본(Iris) 스크린샷과의 비교.
 - 아직 없는 것: 게임 내 그래픽 옵션의 "Metal" 선택지, GPU 타임스탬프 쿼리(F3의 GPU 사용률은 의미 없음), multi-draw·indirect draw(장치 기능으로 꺼 둠), 렌더 영역이 일부인 패스의 색·깊이 단독 클리어.
 - Java 예외 한 곳: `backend/MetalBackendBase.java`. Mojang이 null을 넘기는데 non-null로 선언된 `GpuBackend.handleWindowCreationErrors`는 Kotlin으로 안전하게 오버라이드할 수 없어서 Java로 받는다.
 - Metal 백엔드는 게임테스트 API가 하는 화면 출력 크기 보정(`GlCommandEncoderMixin`, `VulkanGpuSurfaceMixin` 참고)을 직접 처리해야 한다.

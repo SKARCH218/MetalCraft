@@ -35,7 +35,8 @@ internal object Mcn {
     @JvmField val textureViewCreate = bind("mcn_texture_view_create", L, I, I, I, A)
     @JvmField val texelBufferCreate = bind("mcn_texel_buffer_create", L, I, L, L, I, A)
     @JvmField val samplerCreate = bind("mcn_sampler_create", L, I, I, I, I, I, I, F, A)
-    @JvmField val shaderPairCreate = bind("mcn_shader_pair_create", L, A, A, A)
+    @JvmField val shadowSamplerCreate = bind("mcn_shadow_sampler_create", L, A)
+    @JvmField val shaderPairCreate = bind("mcn_shader_pair_create", L, A, A, I, A)
     @JvmField val pipelineCreate = bind("mcn_pipeline_create", L, L, A, I, A, A)
 
     @JvmField val passBegin = bind("mcn_pass_begin", L, I, A, I, A, L, I, D, A)

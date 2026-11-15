@@ -12,6 +12,7 @@ import net.fabricmc.fabric.api.client.gametest.v1.screenshot.TestScreenshotOptio
 import net.fabricmc.fabric.impl.client.gametest.world.TestWorldSaveImpl
 import net.minecraft.client.CloudStatus
 import net.minecraft.client.InactivityFpsLimit
+import dev.skarch.metalcraft.pipeline.ShaderPipeline
 import net.minecraft.client.KeyMapping
 import net.minecraft.client.Minecraft
 import net.minecraft.client.Options
@@ -115,11 +116,19 @@ private class Harness(private val context: ClientGameTestContext) {
         return shot!!
     }
 
-    /** Presses MetalCraft's "next shader pack" key and waits until its on-screen message has faded. */
-    private fun pressShaderPackKey() {
-        context.input.pressKey(
-            Function<Options, KeyMapping> { options -> options.keyMappings.first { it.name == "key.metalcraft.cycle_shaderpack" } },
-        )
+    /**
+     * Presses MetalCraft's "next shader pack" key until [pack] ("off" for none) is selected, then waits until
+     * the on-screen message has faded. The key steps through every installed pack.
+     */
+    private fun selectShaderPackWithKey(pack: String) {
+        var presses = 0
+        while (ShaderPipeline.selectedId() != pack) {
+            check(presses++ < 32) { "Shader pack '$pack' cannot be reached with the key" }
+            context.input.pressKey(
+                Function<Options, KeyMapping> { options -> options.keyMappings.first { it.name == "key.metalcraft.cycle_shaderpack" } },
+            )
+            context.waitTicks(2)
+        }
         context.waitTicks(100)
     }
 
@@ -359,9 +368,9 @@ private class Harness(private val context: ClientGameTestContext) {
                 // With a shader pack: switch it off and on again with its key. "pack_off" must look like the
                 // game without a pack, "pack_on_again" like "after_reload".
                 if (shaderPack != null) {
-                    pressShaderPackKey()
+                    selectShaderPackWithKey("off")
                     capture("pack_off", OVERWORLD, benchmarkable = false)
-                    pressShaderPackKey()
+                    selectShaderPackWithKey(shaderPack)
                     capture("pack_on_again", OVERWORLD, benchmarkable = false)
                 }
                 teleport(world, OVERWORLD, view)
@@ -513,9 +522,13 @@ private class Harness(private val context: ClientGameTestContext) {
         context.waitTicks(5)
         val file = try {
             if (pixelCompare) {
-                context.onClient { Determinism.holdAnimations = true }
-                // The next texture tick redraws every animated sprite at frame zero.
-                context.waitTicks(2)
+                context.onClient {
+                    Determinism.holdAnimations = true
+                    ShaderPipeline.holdTime = true
+                }
+                // The next texture tick redraws every animated sprite at frame zero. A shader pack blends
+                // each frame with earlier ones, so with one the picture needs a moment to settle.
+                context.waitTicks(if (shaderPack != null) 30 else 2)
                 context.onClient { client ->
                     client.particleEngine.clearParticles()
                     client.gui.toastManager().clear()
@@ -523,7 +536,10 @@ private class Harness(private val context: ClientGameTestContext) {
             }
             context.takeScreenshot(TestScreenshotOptions.of(name).disableCounterPrefix().withDestinationDir(outputDir))
         } finally {
-            context.onClient { Determinism.holdAnimations = false }
+            context.onClient {
+                Determinism.holdAnimations = false
+                ShaderPipeline.holdTime = false
+            }
         }
 
         val warmup = if (benchmarkable) warmupSeconds else QUICK_WARMUP_SECONDS
@@ -581,8 +597,10 @@ private class Harness(private val context: ClientGameTestContext) {
         val LOGGER = LoggerFactory.getLogger("MetalCraft/Test")
         val GSON = GsonBuilder().setPrettyPrinting().serializeNulls().create()
 
-        const val WIDTH = 1920
-        const val HEIGHT = 1200
+        // 1920x1200 unless -Dmetalcraft.test.width / height ask for another size (for measurements only:
+        // the baselines are 1920x1200).
+        val WIDTH: Int = Integer.getInteger("metalcraft.test.width", 1920)
+        val HEIGHT: Int = Integer.getInteger("metalcraft.test.height", 1200)
         const val RENDER_DISTANCE = 12
         const val GUI_SCALE = 3
         const val UNLIMITED_FRAMERATE = 260

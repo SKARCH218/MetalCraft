@@ -5,6 +5,10 @@ struct TerrainIn {
     float4 Color [[attribute(1)]];
     float2 UV0 [[attribute(2)]];
     int2 UV2 [[attribute(3)]];
+    float4 McNormal [[attribute(4)]];
+    float4 McTangent [[attribute(5)]];
+    int2 McEntity [[attribute(6)]];
+    float2 McMidTexCoord [[attribute(7)]];
 };
 
 struct TerrainVarying {
@@ -14,6 +18,7 @@ struct TerrainVarying {
     float3 relative;        // position relative to the camera, world axes
     float sphericalDistance;
     float cylindricalDistance;
+    float3 normal;          // face normal, world axes
     float blockLight;       // light from torches and other blocks, 0..1
 };
 

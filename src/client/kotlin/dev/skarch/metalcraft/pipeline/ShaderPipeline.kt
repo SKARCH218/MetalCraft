@@ -31,9 +31,11 @@ import net.fabricmc.loader.api.FabricLoader
 import net.minecraft.client.Minecraft
 import net.minecraft.client.renderer.RenderPipelines
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer
+import net.minecraft.client.renderer.chunk.ChunkSectionLayerGroup
 import net.minecraft.client.renderer.chunk.ChunkSectionsToRender
 import net.minecraft.client.renderer.chunk.SectionRenderDispatcher
 import net.minecraft.core.BlockPos
+import net.minecraft.world.level.Level
 import net.minecraft.client.renderer.state.level.CameraRenderState
 import org.joml.Matrix4f
 import org.joml.Vector3f
@@ -70,9 +72,18 @@ object ShaderPipeline {
     @JvmField
     internal var gbuffer: Gbuffer? = null
 
+    /**
+     * While set, the clock and frame counter that converted packs animate with stand still, so that a frame
+     * can be reproduced exactly. The automated test harness sets it around screenshots.
+     */
+    @JvmField
+    @Volatile
+    var holdTime = false
+
     private var packs: List<ShaderPack> = emptyList()
     private var selected: String = OFF
     private var loaded: LoadedPack? = null
+    private var converted: ConvertedPack? = null
     private var failedPack: String? = null
     private var frameSlice: GpuBufferSlice? = null
     private var worldActive = false
@@ -108,6 +119,9 @@ object ShaderPipeline {
     /** Names of the packs that can be selected, in menu order. */
     fun availablePacks(): List<String> = packs.map { it.id }
 
+    /** Folder name of the selected pack, or "off". */
+    fun selectedId(): String = selected
+
     /** Display name of the selected pack, or "Off". */
     fun selectedName(): String = packs.firstOrNull { it.id == selected }?.displayName ?: "Off"
 
@@ -132,7 +146,20 @@ object ShaderPipeline {
         worldActive = false
         val device = MetalDevice.current ?: return
         val minecraft = Minecraft.getInstance()
-        val pack = activePack(device, minecraft) ?: return
+        val pack = activePack(device, minecraft)
+        val convertedPack = converted
+        if (convertedPack != null) {
+            try {
+                val target = Upscaler.worldTarget(minecraft)
+                convertedPack.beginWorld(minecraft, camera, projection, target)
+                gbuffer = convertedPack.gbuffer(target.colorTexture)
+                worldActive = true
+            } catch (e: Exception) {
+                fail(convertedPack.pack.id, e)
+            }
+            return
+        }
+        if (pack == null) return
         try {
             // With upscaling on, the world (and so the pack) works on the smaller images.
             val target = Upscaler.worldTarget(minecraft)
@@ -154,10 +181,32 @@ object ShaderPipeline {
         if (!worldActive) return
         worldActive = false
         val device = MetalDevice.current ?: return
+        val convertedPack = converted
+        if (convertedPack != null) {
+            try {
+                convertedPack.endWorld(Upscaler.worldTarget(Minecraft.getInstance()))
+            } catch (e: Exception) {
+                fail(convertedPack.pack.id, e)
+            }
+            return
+        }
         val pack = loaded ?: return
         try {
             val target = Upscaler.worldTarget(Minecraft.getInstance())
             pack.runPasses(device, target.colorTexture, target.colorView, target.depthView)
+        } catch (e: Exception) {
+            fail(pack.pack.id, e)
+        }
+    }
+
+    /** Called before the game draws a group of terrain layers (from `ChunkSectionsToRenderMixin`). */
+    @JvmStatic
+    fun beforeChunkGroup(group: ChunkSectionLayerGroup) {
+        val pack = converted ?: return
+        if (!worldActive || group != ChunkSectionLayerGroup.TRANSLUCENT) return
+        try {
+            val target = Upscaler.worldTarget(Minecraft.getInstance())
+            pack.beforeTranslucent(target)
         } catch (e: Exception) {
             fail(pack.pack.id, e)
         }
@@ -169,6 +218,7 @@ object ShaderPipeline {
     internal fun substitute(pipeline: RenderPipeline, passHasExtraTargets: Boolean): DrawProgram? {
         // Pack programs write all G-buffer targets, so they only fit passes that carry them.
         if (gbuffer == null || !passHasExtraTargets) return null
+        converted?.let { return it.substitute(pipeline) }
         val pack = loaded ?: return null
         return when {
             pipeline === RenderPipelines.SOLID_TERRAIN -> pack.terrainSolid
@@ -180,12 +230,19 @@ object ShaderPipeline {
 
     /** Gives a pass that just switched to a pack program what the game does not bind itself. */
     internal fun bindFrameResources(pass: MetalRenderPass) {
+        converted?.let { return it.bindDraw(pass) }
         pass.setUniform(FRAME_UNIFORMS, frameSlice ?: return)
     }
 
+    /**
+     * Whether game pipelines without a pack program are left out of the world. A converted pack draws the
+     * world into its own buffers, where the game's shaders have nothing to add.
+     */
+    internal fun hidesGameDraws(): Boolean = converted != null && gbuffer != null
+
     /** A pack program could not be used for a draw: the pack goes off and the game's own pipeline draws instead. */
     internal fun programFailed(error: Exception) {
-        fail(loaded?.pack?.id ?: selected, error)
+        fail(loaded?.pack?.id ?: converted?.pack?.id ?: selected, error)
     }
 
     internal fun deviceClosing() {
@@ -193,6 +250,8 @@ object ShaderPipeline {
         worldActive = false
         loaded?.destroy()
         loaded = null
+        converted?.destroy()
+        converted = null
     }
 
     // ---- pack state ---------------------------------------------------------------------------------------
@@ -212,11 +271,27 @@ object ShaderPipeline {
         }
         val current = loaded
         if (current != null && current.pack.id == selected) return current
-        unload()
+        // A converted pack has its own programs for the Nether and for the End.
+        val dimension = when (minecraft.level?.dimension()) {
+            Level.NETHER -> "world-1"
+            Level.END -> "world1"
+            else -> "world0"
+        }
+        val currentConverted = converted
+        if (currentConverted != null && currentConverted.pack.id == selected && currentConverted.dimension == dimension) return null
+        // Another dimension of the same pack has the same block IDs: the terrain need not be rebuilt for it.
+        unload(resetBlockIds = currentConverted == null || currentConverted.pack.id != selected)
         val pack = packs.firstOrNull { it.id == selected } ?: return null
         return try {
+            if (pack.isConverted) {
+                converted = ConvertedPack(device, pack, pack.converted(dimension), dimension)
+                applyBlockIds(pack.blockIdsFile?.let(pack::read))
+                LOGGER.info("Shader pack loaded: {}", pack.displayName)
+                return null
+            }
             val fresh = LoadedPack(device, pack)
             loaded = fresh
+            applyBlockIds(pack.blockIdsFile?.let(pack::read))
             loadedAtNanos = System.nanoTime()
             LOGGER.info("Shader pack loaded: {}", pack.displayName)
             fresh
@@ -226,12 +301,24 @@ object ShaderPipeline {
         }
     }
 
-    private fun unload() {
+    private fun unload(resetBlockIds: Boolean = true) {
         gbuffer = null
+        val convertedPack = converted
+        if (convertedPack != null) {
+            converted = null
+            if (resetBlockIds) applyBlockIds(null)
+            convertedPack.destroy()
+        }
         val current = loaded ?: return
         loaded = null
+        applyBlockIds(null)
         // Its targets may still be in use by the frame being recorded; the backend defers the release.
         current.destroy()
+    }
+
+    /** Block IDs live in the terrain vertices: when the table changes, every section is built again. */
+    private fun applyBlockIds(table: String?) {
+        if (BlockIds.load(table)) Minecraft.getInstance().levelExtractor.allChanged()
     }
 
     /** A pack that cannot be compiled or drawn is switched off until another one is selected. */
@@ -309,11 +396,12 @@ object ShaderPipeline {
      * is swapped for the shadow casters while the lists are built and put back afterwards.
      * Sections the game has never built (never seen since they loaded) cast no shadow.
      */
-    private fun shadowSections(minecraft: Minecraft, pack: LoadedPack): ChunkSectionsToRender {
+    internal fun shadowSections(
+        minecraft: Minecraft, shadowModelView: Matrix4f, distance: Float, cameraX: Double, cameraY: Double, cameraZ: Double,
+    ): ChunkSectionsToRender {
         val renderer = minecraft.levelRenderer
         val viewArea = (renderer as LevelRendererAccessor).`metalcraft$viewArea`()
             ?: return renderer.prepareChunkRenders(shadowModelView)
-        val distance = pack.pack.shadowDistance
         val reach = (distance / 16f).toInt() + 2
         val limit = distance + SECTION_RADIUS
         val centreX = Math.floor(cameraX).toInt() shr 4
@@ -354,7 +442,7 @@ object ShaderPipeline {
     private fun renderShadow(device: MetalDevice, minecraft: Minecraft, pack: LoadedPack) {
         val program = pack.shadow ?: return
         val shadowView = pack.shadowView ?: return
-        val sections = shadowSections(minecraft, pack)
+        val sections = shadowSections(minecraft, shadowModelView, pack.pack.shadowDistance, cameraX, cameraY, cameraZ)
         val resolution = pack.pack.shadowResolution
         val descriptor = RenderPassDescriptor.create { "MetalCraft shadow" }
             .withDepthAttachment(shadowView, OptionalDouble.of(1.0))
@@ -364,16 +452,21 @@ object ShaderPipeline {
             pass.setProgram(program)
             pass.setUniform(FRAME_UNIFORMS, frameSlice!!)
             pass.bindTexture("Sampler0", sections.textureView(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST))
-            val sharedIndices = RenderSystem.getSequentialBuffer(PrimitiveTopology.QUADS)
-            val defaultIndexBuffer = if (sections.maxIndicesRequired() == 0) null else sharedIndices.getBuffer(sections.maxIndicesRequired())
-            for (layer in SHADOW_LAYERS) {
-                val groups = sections.drawGroupsPerLayer()[layer] ?: continue
-                for (draws in groups.values) {
-                    pass.drawMultipleIndexed(draws, defaultIndexBuffer, sharedIndices.type(), chunkSectionUniform, sections.chunkSectionInfos())
-                }
-            }
+            drawShadowTerrain(pass, sections)
         } finally {
             device.encoder.submitRenderPass()
+        }
+    }
+
+    /** Draws the opaque layers of [sections] with the program and bindings already set on [pass]. */
+    internal fun drawShadowTerrain(pass: MetalRenderPass, sections: ChunkSectionsToRender) {
+        val sharedIndices = RenderSystem.getSequentialBuffer(PrimitiveTopology.QUADS)
+        val defaultIndexBuffer = if (sections.maxIndicesRequired() == 0) null else sharedIndices.getBuffer(sections.maxIndicesRequired())
+        for (layer in SHADOW_LAYERS) {
+            val groups = sections.drawGroupsPerLayer()[layer] ?: continue
+            for (draws in groups.values) {
+                pass.drawMultipleIndexed(draws, defaultIndexBuffer, sharedIndices.type(), chunkSectionUniform, sections.chunkSectionInfos())
+            }
         }
     }
 
@@ -434,8 +527,8 @@ object ShaderPipeline {
                     // Defines go first so the pack's include files see them too.
                     fun build(name: String, defines: String, masks: IntArray, blend: Boolean) = program(
                         PackProgram(
-                            device, "${pack.id}/$name", vertex, defines + header + fragment, TERRAIN_ENTRIES, DefaultVertexFormat.BLOCK,
-                            gbufferFormats, masks, blend, COMPARE_GREATER_EQUAL, true, 1,
+                            device, "${pack.id}/$name", vertex, defines + header + fragment, TERRAIN_ENTRIES, TerrainVertexFormat.current(),
+                            gbufferFormats, masks, if (blend) 1 else 0, COMPARE_GREATER_EQUAL, true, 1,
                         ),
                         DEPTH_FORMAT,
                     )
@@ -453,7 +546,7 @@ object ShaderPipeline {
                     program(
                         PackProgram(
                             device, "${pack.id}/shadow", header + pack.read(shadowFiles.vertex), header + pack.read(shadowFiles.fragment),
-                            SHADOW_ENTRIES, DefaultVertexFormat.BLOCK, IntArray(0), IntArray(0), false, COMPARE_LESS_EQUAL, true, 0,
+                            SHADOW_ENTRIES, TerrainVertexFormat.current(), IntArray(0), IntArray(0), 0, COMPARE_LESS_EQUAL, true, 0,
                         ),
                         DEPTH_FORMAT,
                     )
@@ -477,7 +570,7 @@ object ShaderPipeline {
                     for ((i, input) in spec.inputs.withIndex()) entries.add(BindingEntry(BindingEntry.TEXTURE, input, null, i))
                     val compiled = PackProgram(
                         device, "${pack.id}/${spec.fragment}", fullscreenVertex, header + pack.read(spec.fragment), entries.toTypedArray(), null,
-                        formats, IntArray(formats.size) { WRITE_ALL }, false, -1, false, 0,
+                        formats, IntArray(formats.size) { WRITE_ALL }, 0, -1, false, 0,
                     )
                     passes.add(LoadedPass(spec, program(compiled, MetalFormats.NO_FORMAT)))
                 }
@@ -636,7 +729,7 @@ object ShaderPipeline {
         }
     }
 
-    private fun engineSource(file: String): String {
+    internal fun engineSource(file: String): String {
         val container = FabricLoader.getInstance().getModContainer(MetalCraft.MOD_ID)
             .orElseThrow { IllegalStateException("Mod container '${MetalCraft.MOD_ID}' not found") }
         val path = container.findPath("assets/metalcraft/shaders/$file").orElseThrow { IllegalStateException("$file is missing from the mod") }

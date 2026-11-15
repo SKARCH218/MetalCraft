@@ -60,7 +60,7 @@ internal class MetalPipeline(private val device: MetalDevice, val info: RenderPi
         Arena.ofConfined().use { arena ->
             val out = arena.allocate(JAVA_LONG)
             Mcn.check(
-                Mcn.shaderPairCreate.invokeExact(device.context, arena.allocateFrom(shaders.vertexMsl), arena.allocateFrom(shaders.fragmentMsl), out) as Int,
+                Mcn.shaderPairCreate.invokeExact(device.context, arena.allocateFrom(shaders.vertexMsl), arena.allocateFrom(shaders.fragmentMsl), 0, out) as Int,
             )
             return out.get(JAVA_LONG, 0)
         }
