@@ -83,7 +83,7 @@ private val BUFFER_CLEAR = Regex("""const\s+bool\s+colortex(\d+)Clear\s*=\s*(tru
 private val SHADOW_CONSTANT = Regex("""const\s+(?:int|float)\s+(shadowMapResolution|shadowDistance|sunPathRotation)\s*=\s*(-?[0-9.]+)\s*;""")
 
 /** Members the engine needs in the block besides the pack's own uniforms. */
-private val ENGINE_UNIFORMS = listOf("vec4" to "mc_fog")
+private val ENGINE_UNIFORMS = listOf("vec4" to "mc_fog", "mat4" to "mc_bob")
 
 private const val UNIFORM_BLOCK = "PackUniforms"
 private const val SKY_PROGRAM = "gbuffers_skybasic"
@@ -454,9 +454,10 @@ private class Converter(private val source: Path, private val output: Path, priv
             prelude.append(
                 when (program.kind) {
                     Kind.TERRAIN -> TERRAIN_INPUTS + matrices("gbufferModelView", "gbufferProjection")
-                    Kind.ENTITY -> DYNAMIC_TRANSFORMS + ENTITY_INPUTS + matrices("ModelViewMat", "gbufferProjection")
-                    Kind.PARTICLE -> DYNAMIC_TRANSFORMS + PARTICLE_INPUTS + matrices("ModelViewMat", "gbufferProjection")
-                    Kind.CELESTIAL -> DYNAMIC_TRANSFORMS + CELESTIAL_INPUTS + matrices("ModelViewMat", "gbufferProjection")
+                    // The game sways the view in its projection; here the sway (mc_bob) belongs to the view.
+                    Kind.ENTITY -> DYNAMIC_TRANSFORMS + ENTITY_INPUTS + matrices("mc_bob * ModelViewMat", "gbufferProjection")
+                    Kind.PARTICLE -> DYNAMIC_TRANSFORMS + PARTICLE_INPUTS + matrices("mc_bob * ModelViewMat", "gbufferProjection")
+                    Kind.CELESTIAL -> DYNAMIC_TRANSFORMS + CELESTIAL_INPUTS + matrices("mc_bob * ModelViewMat", "gbufferProjection")
                     Kind.SHADOW -> TERRAIN_INPUTS + matrices("shadowModelView", "shadowProjection")
                     Kind.FULLSCREEN -> FULLSCREEN_INPUTS + matrices("mat4(1.0)", "mat4(1.0)")
                 },

@@ -394,9 +394,9 @@ internal class ConvertedPack(
 
     // ---- frame ------------------------------------------------------------------------------------------------
 
-    fun beginWorld(minecraft: Minecraft, camera: CameraRenderState, gameProjection: Matrix4f, target: Upscaler.WorldTarget) {
+    fun beginWorld(minecraft: Minecraft, camera: CameraRenderState, gameProjection: Matrix4f, bob: Matrix4f, target: Upscaler.WorldTarget) {
         resize(target.width, target.height)
-        writeUniforms(minecraft, camera, gameProjection)
+        writeUniforms(minecraft, camera, gameProjection, bob)
         for (color in colors) {
             if (color != null && color.spec.clear) device.encoder.clearColorTexture(color.texture!!, clearBlack)
         }
@@ -579,7 +579,7 @@ internal class ConvertedPack(
 
     // ---- uniforms ---------------------------------------------------------------------------------------------
 
-    private fun writeUniforms(minecraft: Minecraft, camera: CameraRenderState, gameProjection: Matrix4f) {
+    private fun writeUniforms(minecraft: Minecraft, camera: CameraRenderState, gameProjection: Matrix4f, bob: Matrix4f) {
         val now = System.nanoTime()
         val held = ShaderPipeline.holdTime
         val frameTime = if (held || lastFrameNanos == 0L) 0.016f else ((now - lastFrameNanos) / 1e9).toFloat().coerceIn(0.0001f, 1f)
@@ -598,11 +598,15 @@ internal class ConvertedPack(
         val position = camera.pos
 
         // The camera. The pack gets the projection OpenGL would use for the same view: the game's has depth reversed.
-        modelView.set(camera.viewRotationMatrix)
+        // The game puts the sway of walking and of being hurt into its projection. A pack works back from
+        // pixels to positions with the projection alone, so the sway has to be part of the view instead.
+        modelView.set(bob).mul(camera.viewRotationMatrix)
+        matrix("mc_bob", bob)
+        projection.set(gameProjection).mul(bob.invert(inverse))
         // The game's matrix has m22 = near / (far - near) and m32 = near * far / (far - near).
-        val near = gameProjection.m32() / (1f + gameProjection.m22())
-        val far = gameProjection.m32() / gameProjection.m22()
-        projection.set(gameProjection).m22(-(far + near) / (far - near)).m32(-2f * far * near / (far - near))
+        val near = projection.m32() / (1f + projection.m22())
+        val far = projection.m32() / projection.m22()
+        projection.m22(-(far + near) / (far - near)).m32(-2f * far * near / (far - near))
         if (!hasPrevious) {
             previousModelView.set(modelView)
             previousProjection.set(projection)

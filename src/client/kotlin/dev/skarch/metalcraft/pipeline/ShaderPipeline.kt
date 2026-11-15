@@ -138,9 +138,12 @@ object ShaderPipeline {
 
     // ---- frame hooks, called from GameRendererMixin -------------------------------------------------------
 
-    /** Called right before the game renders the world. [projection] is the matrix the world is drawn with. */
+    /**
+     * Called right before the game renders the world. [projection] is the matrix the world is drawn with;
+     * the game has multiplied the walking and hurt sway of the view, [bob], into it.
+     */
     @JvmStatic
-    fun beginWorld(camera: CameraRenderState, projection: Matrix4f) {
+    fun beginWorld(camera: CameraRenderState, projection: Matrix4f, bob: Matrix4f) {
         // Also clears what an interrupted previous frame may have left behind.
         gbuffer = null
         worldActive = false
@@ -151,7 +154,7 @@ object ShaderPipeline {
         if (convertedPack != null) {
             try {
                 val target = Upscaler.worldTarget(minecraft)
-                convertedPack.beginWorld(minecraft, camera, projection, target)
+                convertedPack.beginWorld(minecraft, camera, projection, bob, target)
                 gbuffer = convertedPack.gbuffer(target.colorTexture)
                 worldActive = true
             } catch (e: Exception) {

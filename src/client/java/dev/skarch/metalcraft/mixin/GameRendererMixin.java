@@ -1,6 +1,7 @@
 package dev.skarch.metalcraft.mixin;
 
 import com.llamalad7.mixinextras.sugar.Local;
+import com.mojang.blaze3d.vertex.PoseStack;
 import dev.skarch.metalcraft.pipeline.ShaderPipeline;
 import dev.skarch.metalcraft.upscale.Upscaler;
 import net.minecraft.client.DeltaTracker;
@@ -33,9 +34,10 @@ public class GameRendererMixin {
 
     @Inject(method = "renderLevel", at = @At(value = "INVOKE", target = RENDER_LEVEL_CALL))
     private void metalcraft$beforeWorld(
-        DeltaTracker deltaTracker, CallbackInfo ci, @Local CameraRenderState cameraState, @Local Matrix4f projectionMatrix
+        DeltaTracker deltaTracker, CallbackInfo ci, @Local CameraRenderState cameraState, @Local Matrix4f projectionMatrix,
+        @Local PoseStack bobStack
     ) {
-        ShaderPipeline.beginWorld(cameraState, projectionMatrix);
+        ShaderPipeline.beginWorld(cameraState, projectionMatrix, bobStack.last().pose());
     }
 
     @Inject(method = "renderLevel", at = @At(value = "INVOKE", target = RENDER_LEVEL_CALL, shift = At.Shift.AFTER))
