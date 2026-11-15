@@ -231,6 +231,12 @@ private func guarded(_ code: Int32 = MCN_ERR_RENDER, _ body: () throws -> Void) 
     return code
 }
 
+// The same helpers for the other files of the library.
+func contextFromHandle(_ handle: Int) -> MetalContext { context(handle) }
+func objectFromHandle<T>(_ handle: Int) -> T { object(handle) }
+func retainedHandle(_ value: AnyObject) -> Int { retained(value) }
+func guardedCall(_ code: Int32, _ body: () throws -> Void) -> Int32 { guarded(code, body) }
+
 private func label(_ text: UnsafePointer<CChar>?) -> String? {
     text.map { String(cString: $0) }
 }

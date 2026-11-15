@@ -57,6 +57,7 @@ class MetalCraftGameTest : FabricClientGameTest {
 private class Harness(private val context: ClientGameTestContext) {
     private val requestedBackend: String? = System.getProperty("metalcraft.backend")?.trim()?.lowercase()
     private val benchmark = System.getProperty("metalcraft.test.benchmark").toBoolean()
+    private val upscaling = System.getProperty("metalcraft.upscale").let { it == "temporal" || it == "spatial" }
     private val shaderPack: String? = System.getProperty("metalcraft.shaderpack")?.takeIf { it.isNotBlank() && it != "off" }
     private val sceneFilter: Set<String> = System.getProperty("metalcraft.test.scenes").orEmpty()
         .split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
@@ -96,6 +97,22 @@ private class Harness(private val context: ClientGameTestContext) {
         // The run script appends this table to docs/benchmarks.md.
         if (benchmark) Files.writeString(outputDir.resolve("benchmark.md"), benchmarkTable.toString())
         LOGGER.info("Test run finished: {} scenes written to {}", sceneResults.size(), outputDir)
+    }
+
+    /** Turns the camera steadily and takes a screenshot in the middle of the turn. */
+    private fun movingCameraShot(name: String, yawPerTick: Float, pitchPerTick: Float): Path {
+        var shot: Path? = null
+        for (tick in 0 until 30) {
+            context.onClient { client ->
+                client.player?.let {
+                    it.yRot = it.yRot + yawPerTick
+                    it.xRot = it.xRot + pitchPerTick
+                }
+            }
+            if (tick == 20) shot = context.takeScreenshot(TestScreenshotOptions.of(name).disableCounterPrefix().withDestinationDir(outputDir))
+            context.waitTicks(1)
+        }
+        return shot!!
     }
 
     /** Presses MetalCraft's "next shader pack" key and waits until its on-screen message has faded. */
@@ -216,6 +233,15 @@ private class Harness(private val context: ClientGameTestContext) {
                 // Facing east so the morning sun, clouds and terrain all land in the frame.
                 val view = Viewpoint(plains.x + 0.5, plains.y + 4.0, plains.z + 0.5, -90f, 5f)
                 worldScene("plains_day", world, OVERWORLD, view)
+                // With MetalFX temporal upscaling, a frame taken while the camera turns shows whether the
+                // motion image is right: wrong motion smears the whole picture. Looked at by eye and by a
+                // sharpness measure, not compared pixel by pixel (the exact angle depends on frame timing).
+                if (upscaling) {
+                    LOGGER.info("Moving camera frame saved to {}", movingCameraShot("moving_camera", 2.0f, 0f))
+                    LOGGER.info("Moving camera frame saved to {}", movingCameraShot("moving_camera_pitch", 0f, 1.0f))
+                    teleport(world, OVERWORLD, view)
+                    waitForWorldReady()
+                }
             }
 
             if (selected("ocean")) {

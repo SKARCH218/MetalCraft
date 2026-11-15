@@ -63,6 +63,11 @@ val harnessProperties = listOf(
     "metalcraft.test.worldCache",
     "metalcraft.debug.timing",
     "metalcraft.shaderpack",
+    "metalcraft.upscale",
+    "metalcraft.renderScale",
+    "metalcraft.debug.jitterSignX",
+    "metalcraft.debug.jitterSignY",
+    "metalcraft.debug.motionSign",
 )
 
 loom {

@@ -100,7 +100,7 @@ MetalCraft/
 
 ## 4. 마일스톤
 
-한 번에 하나씩 진행한다. M0.5 이후로는 각 단계의 완료 조건을 **자동 테스트(6-1)로 직접 확인**하고, 결과 스크린샷과 수치를 사용자에게 알린 뒤 다음 단계로 넘어간다.
+한 번에 하나씩 진행한다. **순서 변경(2026-11-15, 사용자 결정): M5 다음에 M7의 첫 팩인 Complementary 포팅을 먼저 하고, 그 뒤 M6, 이어서 M7의 나머지 팩 순으로 진행한다.** M0.5 이후로는 각 단계의 완료 조건을 **자동 테스트(6-1)로 직접 확인**하고, 결과 스크린샷과 수치를 사용자에게 알린 뒤 다음 단계로 넘어간다.
 
 | 단계 | 내용 | 완료 조건 |
 |---|---|---|
@@ -115,7 +115,7 @@ MetalCraft/
 | M7 | 쉐이더팩 포팅 | 아래 순서로 하나씩. 각 팩은 원본(Iris, 가능하면 Windows나 Linux)과 스크린샷 비교 |
 
 ### 쉐이더팩 포팅 순서
-1. Complementary Shaders (첫 타깃, 구조 기준점)
+1. Complementary Shaders (첫 타깃, 구조 기준점). Reimagined r5.9.3 원본은 `shaderpacks/_original/`에 둔다
 2. Rethinking Voxels (Complementary 기반, 맥 OpenGL 4.1에서 못 쓰는 기능 사용)
 3. AstraLex
 4. Photon Shaders
@@ -152,6 +152,7 @@ scripts/run-tests.sh --benchmark          # 벤치마크: 장면마다 10초 워
 scripts/run-tests.sh --scenes cave,nether # 일부 장면만
 scripts/run-tests.sh --save-baseline      # 이번 실행을 기준 세트(run/test-baseline/<backend>)로 저장
 scripts/run-tests.sh --shaderpack test    # Metal + 쉐이더팩으로 실행 (결과와 기준 폴더는 metal-<팩 이름>)
+scripts/run-tests.sh --upscale temporal --render-scale 67   # Metal + MetalFX (spatial | temporal, 결과 폴더 metal-temporal67)
 scripts/run-tests.sh --sodium             # Sodium을 넣고 실행 (호환성 확인용, 결과 폴더는 <backend>-sodium)
 ```
 
@@ -202,6 +203,7 @@ run/test-output/<날짜-시간>/<backend>/
 - 일반 월드는 첫 실행에서 만든 것을 `run/test-worlds/`에 보관해 재사용한다. 같은 시드라도 월드 생성 결과가 실행마다 조금 달라지기 때문이다. `--fresh-worlds`로 지우면 기준 세트도 다시 저장해야 한다.
 - 기준 세트는 `run/test-baseline/opengl/`(git 제외). 월드를 새로 만든 실행으로는 기준을 저장할 수 없다(한 번 더 실행).
 - 촬영 순간에 텍스처 애니메이션·구름·조명 깜빡임을 고정하고 파티클을 지운다. 비네트는 꺼 둔다. 그래서 같은 렌더러끼리는 픽셀 단위로 일치한다(차이 0.01% 미만).
+- 업스케일링을 켠 실행은 프레임 타이밍에 따라 결과가 조금씩 달라 픽셀 비교 기준을 두지 않는다. 회전 중에 찍는 `moving_camera.png`가 추가로 저장된다.
 - 쉐이더팩을 켠 실행에는 `pack_off`, `pack_on_again` 장면이 추가된다(키로 팩을 껐다 켬). `pack_off`는 팩 없는 `after_reload`와, `pack_on_again`은 같은 실행의 `after_reload`와 같아야 한다.
 - `after_reload` 장면은 창 크기 변경과 리소스 재로딩(F3+T와 같은 동작) 뒤의 화면을 찍는다.
 - `entities_fx`(아이템 드롭, 연기)와 `gui_f3`는 본질적으로 매번 달라서 픽셀 비교에서 빼고 눈으로만 확인한다.
@@ -215,6 +217,10 @@ run/test-output/<날짜-시간>/<backend>/
 - 팩 선택: 게임 안에서 K 키(조작 설정에서 변경 가능)로 순환, `config/metalcraft.properties`의 `shaderpack=`에 저장. `-Dmetalcraft.shaderpack=<이름>`이 있으면 그것이 우선한다. 컴파일에 실패한 팩은 로그를 남기고 꺼진다.
 - 프레임 흐름: `GameRendererMixin`이 월드 렌더링 앞뒤로 엔진을 부른다. 앞에서 그림자 패스를 돌리고, 월드를 그리는 동안 지형 파이프라인을 팩의 `gbuffers_terrain`으로 바꾸며 메인 이미지에 팩의 추가 버퍼를 함께 붙인다. 뒤에서 deferred → composite → final 전체화면 패스를 돌린다. 손과 GUI는 그 뒤에 게임이 그린다.
 - M4에서 아직 없는 것: 엔티티 등 지형 이외의 팩 프로그램과 그림자, 카메라 시야 밖 물체의 그림자, "향상된 투명도" 설정과의 동시 사용(켜져 있으면 팩을 건너뜀), gbuffers 인스턴싱 버전(M6에서 Flywheel과 함께), deferred를 불투명 지오메트리 직후에 돌리는 것(지금은 월드 전체가 끝난 뒤).
+- M5 상태(MetalFX, `upscale/Upscaler.kt`): `config/metalcraft.properties`의 `upscale=off|spatial|temporal`, `render_scale=50~100`(다음 실행부터 적용). `-Dmetalcraft.upscale`, `-Dmetalcraft.renderScale`이 있으면 그것이 우선한다.
+- 업스케일링 중에는 월드를 작은 이미지에 그린다. 백엔드가 게임의 메인 색·깊이 이미지로 가는 패스와 클리어를 작은 이미지로 돌려 보내고(`Upscaler.redirect`), 월드와 쉐이더팩 패스가 끝나면 MetalFX가 메인 이미지로 키운다. 손과 GUI는 그 뒤에 원래 해상도로 그려진다.
+- 시간 모드는 프로젝션에 서브픽셀 지터를 넣고, 깊이와 카메라 이동으로 모션 이미지를 만든다(`upscale_motion.fsh.metal`). 지터와 모션의 부호는 실험으로 정했다(원본 해상도와의 차이, 회전 중 프레임의 선명도).
+- M5에서 아직 없는 것: 스스로 움직이는 것(엔티티, 이후 Create 장치)의 모션 벡터, 프레임 보간, 게임 내 설정 화면.
 - 아직 없는 것: 게임 내 그래픽 옵션의 "Metal" 선택지, GPU 타임스탬프 쿼리(F3의 GPU 사용률은 의미 없음), multi-draw·indirect draw(장치 기능으로 꺼 둠), 렌더 영역이 일부인 패스의 색·깊이 단독 클리어.
 - Java 예외 한 곳: `backend/MetalBackendBase.java`. Mojang이 null을 넘기는데 non-null로 선언된 `GpuBackend.handleWindowCreationErrors`는 Kotlin으로 안전하게 오버라이드할 수 없어서 Java로 받는다.
 - Metal 백엔드는 게임테스트 API가 하는 화면 출력 크기 보정(`GlCommandEncoderMixin`, `VulkanGpuSurfaceMixin` 참고)을 직접 처리해야 한다.

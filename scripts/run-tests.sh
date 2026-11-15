@@ -10,6 +10,7 @@
 #   scripts/run-tests.sh --save-baseline      # keep this run as the reference set for its backend
 #   scripts/run-tests.sh --stamp NAME         # reuse an output folder name, to group several backends
 #   scripts/run-tests.sh --shaderpack test    # Metal with a shader pack (output and baseline folder metal-<pack>)
+#   scripts/run-tests.sh --upscale temporal --render-scale 67   # Metal with MetalFX (folder metal-temporal67)
 #   scripts/run-tests.sh --sodium             # run with Sodium installed (output folder <backend>-sodium)
 #   scripts/run-tests.sh --fresh-worlds       # regenerate the cached test world (baselines must be re-saved)
 #
@@ -30,6 +31,8 @@ compare=true
 fresh_worlds=false
 sodium=false
 shaderpack=""
+upscale=""
+render_scale=75
 stamp="$(date +%Y%m%d-%H%M%S)"
 
 while [ $# -gt 0 ]; do
@@ -42,8 +45,10 @@ while [ $# -gt 0 ]; do
         --no-compare) compare=false ;;
         --fresh-worlds) fresh_worlds=true ;;
         --sodium) sodium=true ;;
+        --upscale) upscale="${2:?--upscale needs a value}"; backend=metal; shift ;;
+        --render-scale) render_scale="${2:?--render-scale needs a value}"; shift ;;
         --shaderpack) shaderpack="${2:?--shaderpack needs a value}"; backend=metal; shift ;;
-        -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
     shift
@@ -59,6 +64,26 @@ if $save_baseline && [ -n "$scenes" ]; then
     exit 2
 fi
 
+if [ -n "$upscale" ]; then
+    case "$upscale" in
+        spatial|temporal) ;;
+        *) echo "Unknown --upscale '$upscale' (expected spatial or temporal)" >&2; exit 2 ;;
+    esac
+    case "$render_scale" in
+        ''|*[!0-9]*) echo "--render-scale needs a whole number from 50 to 100" >&2; exit 2 ;;
+    esac
+    if [ "$render_scale" -lt 50 ] || [ "$render_scale" -gt 100 ] || { [ "$upscale" = spatial ] && [ "$render_scale" -eq 100 ]; }; then
+        echo "--render-scale must be 50 to 100 (below 100 for spatial)" >&2
+        exit 2
+    fi
+    if [ "$backend" != metal ] || $sodium || $save_baseline; then
+        echo "--upscale needs the Metal backend and cannot be combined with --sodium or --save-baseline" >&2
+        exit 2
+    fi
+    # The result depends on frame timing, so there is no pixel-exact reference to compare with.
+    compare=false
+fi
+
 # The project builds with Temurin 25 only.
 if JAVA_25="$(/usr/libexec/java_home -v 25 2>/dev/null)"; then
     export JAVA_HOME="$JAVA_25"
@@ -67,12 +92,15 @@ fi
 variant="$backend"
 $sodium && variant="$backend-sodium"
 [ -n "$shaderpack" ] && variant="$backend-$shaderpack"
+[ -n "$upscale" ] && variant="$variant-$upscale$render_scale"
 out="$PWD/run/test-output/$stamp/$variant"
 # Sodium draws terrain and clouds its own way, so runs with it have their own reference set.
 baseline="$PWD/run/test-baseline/opengl"
 $sodium && baseline="$PWD/run/test-baseline/opengl-sodium"
 # A shader pack changes the picture on purpose; it is compared with its own earlier result.
 [ -n "$shaderpack" ] && baseline="$PWD/run/test-baseline/$variant"
+# An upscaled picture is close to the full-size one, but not within the pixel tolerance.
+[ -n "$upscale" ] && baseline="$PWD/run/test-baseline/$variant"
 # A reused --stamp must not leave screenshots of an earlier run behind.
 rm -rf "$out"
 mkdir -p "$out"
@@ -87,6 +115,7 @@ gradle_args=(runClientGameTest "-Pmetalcraft.backend=$backend" "-Pmetalcraft.tes
 [ -n "$scenes" ] && gradle_args+=("-Pmetalcraft.test.scenes=$scenes")
 $sodium && gradle_args+=("-Pmetalcraft.sodium=true")
 [ -n "$shaderpack" ] && gradle_args+=("-Pmetalcraft.shaderpack=$shaderpack")
+[ -n "$upscale" ] && gradle_args+=("-Pmetalcraft.upscale=$upscale" "-Pmetalcraft.renderScale=$render_scale")
 
 
 echo "==> Running scenes on $variant (output: $out)"

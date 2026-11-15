@@ -11,6 +11,8 @@ import com.mojang.blaze3d.systems.TransientMemory
 import com.mojang.blaze3d.textures.GpuTexture
 import dev.skarch.metalcraft.native.Mcn
 import dev.skarch.metalcraft.pipeline.ShaderPipeline
+import dev.skarch.metalcraft.upscale.Upscaler
+import com.mojang.blaze3d.systems.RenderPass
 import it.unimi.dsi.fastutil.longs.LongArrayList
 import org.joml.Vector4fc
 import org.lwjgl.system.MemoryUtil
@@ -110,7 +112,18 @@ internal class MetalCommandEncoder(private val device: MetalDevice) : CommandEnc
         check(!inRenderPass) { "A render pass is already open" }
         val colors = descriptor.colorAttachments()
         require(colors.size <= MAX_COLOR_TARGETS) { "Too many colour attachments: ${colors.size}" }
-        val area = checkNotNull(descriptor.renderArea) { "Render pass has no render area" }
+        val requestedArea = checkNotNull(descriptor.renderArea) { "Render pass has no render area" }
+
+        // With MetalFX on, the world is drawn into smaller images: a pass aimed at the game's main colour
+        // and depth images goes to those instead. Only whole pairs are redirected, so sizes always match.
+        val depth = descriptor.depthAttachment()
+        var redirect = Upscaler.redirect
+        if (redirect != null) {
+            val colorIsMain = colors.size == 1 && colors[0]?.textureView()?.texture() === redirect.mainColor
+            val depthFits = depth == null || depth.textureView().texture() === redirect.mainDepth
+            if (!colorIsMain || !depthFits) redirect = null
+        }
+        val area = if (redirect == null) requestedArea else scaleArea(requestedArea, redirect)
 
         var width = 0
         var height = 0
@@ -122,7 +135,7 @@ internal class MetalCommandEncoder(private val device: MetalDevice) : CommandEnc
                 colorHandles.setAtIndex(JAVA_LONG, i.toLong(), 0L)
                 continue
             }
-            val view = attachment.textureView() as MetalTextureView
+            val view = if (redirect != null) redirect.colorView else attachment.textureView() as MetalTextureView
             if (firstColor == null) firstColor = view
             colorHandles.setAtIndex(JAVA_LONG, i.toLong(), view.handle)
             width = view.getWidth(0)
@@ -136,8 +149,7 @@ internal class MetalCommandEncoder(private val device: MetalDevice) : CommandEnc
                 clearColors.setAtIndex(JAVA_FLOAT, i * 4L + 3, clear.w())
             }
         }
-        val depth = descriptor.depthAttachment()
-        val depthView = depth?.textureView() as MetalTextureView?
+        val depthView = if (redirect != null && depth != null) redirect.depthView else depth?.textureView() as MetalTextureView?
         if (depthView != null && width == 0) {
             width = depthView.getWidth(0)
             height = depthView.getHeight(0)
@@ -187,8 +199,31 @@ internal class MetalCommandEncoder(private val device: MetalDevice) : CommandEnc
                 throw UnsupportedOperationException("Partial clear of only colour or only depth is not supported by the Metal backend yet")
             }
         }
-        renderPass.begin(area.x(), area.y(), area.width(), area.height(), depthFormat, extraTargets)
+        renderPass.begin(area.x(), area.y(), area.width(), area.height(), depthFormat, extraTargets, redirect)
         return renderPass
+    }
+
+    /** The part of the reduced-size image that corresponds to [area] of the full-size one. */
+    private fun scaleArea(area: RenderPass.RenderArea, redirect: Upscaler.Redirect): RenderPass.RenderArea {
+        if (area.x() == 0 && area.y() == 0 && area.width() == redirect.fullWidth && area.height() == redirect.fullHeight) {
+            return redirect.fullArea
+        }
+        val left = area.x() * redirect.width / redirect.fullWidth
+        val top = area.y() * redirect.height / redirect.fullHeight
+        val right = minOf(redirect.width, ((area.x() + area.width()).toLong() * redirect.width / redirect.fullWidth).toInt())
+        val bottom = minOf(redirect.height, ((area.y() + area.height()).toLong() * redirect.height / redirect.fullHeight).toInt())
+        return RenderPass.RenderArea(left, top, maxOf(1, right - left), maxOf(1, bottom - top))
+    }
+
+    /** The image a clear aimed at [texture] has to hit while the world is drawn small. */
+    private fun worldImage(texture: GpuTexture): MetalTexture {
+        val redirect = Upscaler.redirect
+        return when {
+            redirect == null -> texture as MetalTexture
+            texture === redirect.mainColor -> redirect.colorTexture
+            texture === redirect.mainDepth -> redirect.depthTexture
+            else -> texture as MetalTexture
+        }
     }
 
     override fun submitRenderPass() {
@@ -201,15 +236,17 @@ internal class MetalCommandEncoder(private val device: MetalDevice) : CommandEnc
     // ---- clears -----------------------------------------------------------------------------------------
 
     override fun clearColorTexture(colorTexture: GpuTexture, clearColor: Vector4fc) {
-        clear(colorTexture as MetalTexture, clearColor, null, 0.0)
+        clear(worldImage(colorTexture), clearColor, null, 0.0)
     }
 
     override fun clearColorAndDepthTextures(colorTexture: GpuTexture, clearColor: Vector4fc, depthTexture: GpuTexture, clearDepth: Double) {
-        clear(colorTexture as MetalTexture, clearColor, depthTexture as MetalTexture, clearDepth)
+        clear(worldImage(colorTexture), clearColor, worldImage(depthTexture), clearDepth)
     }
 
     override fun clearDepthTexture(depthTexture: GpuTexture, clearDepth: Double) {
-        clear(null, null, depthTexture as MetalTexture, clearDepth)
+        val redirect = Upscaler.redirect
+        if (redirect != null && depthTexture === redirect.mainDepth) Upscaler.worldDepthAboutToBeCleared(device)
+        clear(null, null, worldImage(depthTexture), clearDepth)
     }
 
     /** Clears every mip level. Levels both textures have are cleared together. */
@@ -242,14 +279,26 @@ internal class MetalCommandEncoder(private val device: MetalDevice) : CommandEnc
         regionX: Int, regionY: Int, regionWidth: Int, regionHeight: Int,
     ) {
         check(!inRenderPass) { "Cannot clear while inside a render pass" }
-        val color = colorTexture as MetalTexture
-        val depth = depthTexture as MetalTexture
+        // Only a clear of the game's main colour and depth together goes to the small world images.
+        val redirect = Upscaler.redirect?.takeIf { colorTexture === it.mainColor && depthTexture === it.mainDepth }
+        val color = if (redirect != null) redirect.colorTexture else colorTexture as MetalTexture
+        val depth = if (redirect != null) redirect.depthTexture else depthTexture as MetalTexture
+        var x = regionX
+        var y = regionY
+        var w = regionWidth
+        var h = regionHeight
+        if (redirect != null) {
+            x = regionX * redirect.width / redirect.fullWidth
+            y = regionY * redirect.height / redirect.fullHeight
+            w = maxOf(1, regionWidth * redirect.width / redirect.fullWidth)
+            h = maxOf(1, regionHeight * redirect.height / redirect.fullHeight)
+        }
         colorHandles.setAtIndex(JAVA_LONG, 0, color.handle)
         Mcn.check(Mcn.passBegin.invokeExact(context, 1, colorHandles, 0, clearColors, depth.handle, 0, 0.0, MemorySegment.NULL) as Int)
         val cleared = Mcn.passClearRect.invokeExact(
             context, MetalFormats.code(color.format), MetalFormats.code(depth.format),
             clearColor.x(), clearColor.y(), clearColor.z(), clearColor.w(), clearDepth.toFloat(),
-            regionX, regionY, regionWidth, regionHeight,
+            x, y, w, h,
         ) as Int
         Mcn.passEnd.invokeExact(context) as Int
         Mcn.check(cleared)

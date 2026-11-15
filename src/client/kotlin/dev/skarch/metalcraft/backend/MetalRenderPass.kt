@@ -11,6 +11,7 @@ import com.mojang.blaze3d.textures.GpuSampler
 import com.mojang.blaze3d.textures.GpuTextureView
 import dev.skarch.metalcraft.native.Mcn
 import dev.skarch.metalcraft.pipeline.ShaderPipeline
+import dev.skarch.metalcraft.upscale.Upscaler
 import org.lwjgl.PointerBuffer
 import org.lwjgl.system.MemoryUtil
 import java.lang.foreign.Arena
@@ -41,14 +42,18 @@ internal class MetalRenderPass(private val device: MetalDevice, private val enco
     private var areaHeight = 0
     private var depthFormat = MetalFormats.NO_FORMAT
 
+    // Set while the pass draws into the reduced-size world images instead of the game's main ones.
+    private var redirect: Upscaler.Redirect? = null
+
     private var indexBuffer: MetalBuffer? = null
     private var wideIndices = 0
 
     private val texelBufferOut: MemorySegment = Arena.global().allocate(JAVA_LONG)
     private val uniformUploader = RenderPass.UniformUploader { name, buffer -> setUniform(name, buffer) }
 
-    fun begin(x: Int, y: Int, width: Int, height: Int, depthFormat: Int, extraTargets: IntArray?) {
+    fun begin(x: Int, y: Int, width: Int, height: Int, depthFormat: Int, extraTargets: IntArray?, redirect: Upscaler.Redirect?) {
         this.extraTargets = extraTargets
+        this.redirect = redirect
         areaX = x
         areaY = y
         areaWidth = width
@@ -104,7 +109,15 @@ internal class MetalRenderPass(private val device: MetalDevice, private val enco
 
     override fun bindTexture(name: String, textureView: GpuTextureView?, sampler: GpuSampler?) {
         if (textureView != null && sampler != null) {
-            textureViews[name] = textureView as MetalTextureView
+            // While the world is drawn small, reading the game's main images means reading the small ones.
+            val worldImages = Upscaler.redirect
+            val view = when {
+                worldImages == null -> textureView
+                textureView.texture() === worldImages.mainColor -> worldImages.colorView
+                textureView.texture() === worldImages.mainDepth -> worldImages.depthView
+                else -> textureView
+            }
+            textureViews[name] = view as MetalTextureView
             samplers[name] = sampler as MetalSampler
             bindingsDirty = true
         } else if (textureView == null && sampler == null) {
@@ -126,7 +139,17 @@ internal class MetalRenderPass(private val device: MetalDevice, private val enco
     }
 
     override fun enableScissor(x: Int, y: Int, width: Int, height: Int) {
-        Mcn.passSetScissor.invokeExact(context, x, y, width, height) as Int
+        val scaled = redirect
+        if (scaled == null) {
+            Mcn.passSetScissor.invokeExact(context, x, y, width, height) as Int
+            return
+        }
+        // The game gives the rectangle in pixels of its full-size image.
+        val left = x * scaled.width / scaled.fullWidth
+        val top = y * scaled.height / scaled.fullHeight
+        val right = ((x + width).toLong() * scaled.width + scaled.fullWidth - 1) / scaled.fullWidth
+        val bottom = ((y + height).toLong() * scaled.height + scaled.fullHeight - 1) / scaled.fullHeight
+        Mcn.passSetScissor.invokeExact(context, left, top, (right - left).toInt(), (bottom - top).toInt()) as Int
     }
 
     override fun disableScissor() {

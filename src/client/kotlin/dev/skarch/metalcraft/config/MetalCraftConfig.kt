@@ -14,6 +14,8 @@ object MetalCraftConfig {
     private const val FILE_NAME = "metalcraft.properties"
     private const val RENDERER = "renderer"
     private const val SHADER_PACK = "shaderpack"
+    private const val UPSCALE = "upscale"
+    private const val RENDER_SCALE = "render_scale"
 
     private val file: Path = FabricLoader.getInstance().configDir.resolve(FILE_NAME)
 
@@ -23,6 +25,12 @@ object MetalCraftConfig {
     /** Folder name of the selected shader pack, or "off". */
     @Volatile
     var shaderPack: String
+
+    /** MetalFX upscaling: "off", "spatial" or "temporal". Applies at the next start. */
+    val upscale: String
+
+    /** Size of the image the world is rendered at, in percent of the window (50 to 100), when upscaling. */
+    val renderScale: Int
 
     init {
         val values = HashMap<String, String>()
@@ -44,6 +52,8 @@ object MetalCraftConfig {
         }
         useMetalRenderer = renderer != "vanilla"
         shaderPack = values.getOrDefault(SHADER_PACK, "off")
+        upscale = values.getOrDefault(UPSCALE, "off").lowercase()
+        renderScale = values[RENDER_SCALE]?.toIntOrNull()?.coerceIn(50, 100) ?: 75
         if (!Files.isRegularFile(file)) save()
     }
 
@@ -57,7 +67,11 @@ object MetalCraftConfig {
                     "# renderer: metal (render with Apple Metal) or vanilla (Minecraft's own renderer). Applies at the next start.\n" +
                     "$RENDERER=${if (useMetalRenderer) "metal" else "vanilla"}\n" +
                     "# shaderpack: off, or the folder name of a pack in shaderpacks/. Can also be switched in game (key: K by default).\n" +
-                    "$SHADER_PACK=$shaderPack\n",
+                    "$SHADER_PACK=$shaderPack\n" +
+                    "# upscale: off, spatial or temporal (MetalFX). render_scale: 50 to 100, the size the world is drawn at\n" +
+                    "# in percent of the window before it is enlarged. Both apply at the next start.\n" +
+                    "$UPSCALE=$upscale\n" +
+                    "$RENDER_SCALE=$renderScale\n",
             )
         } catch (e: IOException) {
             LOGGER.warn("Could not write {}", file, e)

@@ -24,7 +24,7 @@ run
 native/.build/
 
 # Ported shader packs (personal use only, see CLAUDE.md section 7)
-shaderpacks/
+/shaderpacks/
 
 # oh-my-claudecode session state
 .omc/

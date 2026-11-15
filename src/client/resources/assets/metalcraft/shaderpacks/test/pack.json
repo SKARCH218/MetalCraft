@@ -1,0 +1,22 @@
+{
+  "name": "MetalCraft Test",
+  "include": ["common.metal"],
+  "buffers": {
+    "colortex1": { "format": "RGBA16F" },
+    "colortex2": { "format": "RGBA16F", "scale": 0.25 },
+    "colortex3": { "format": "RGBA16F", "scale": 0.25 }
+  },
+  "gbuffers": ["colortex1"],
+  "shadow": { "resolution": 2048, "distance": 96 },
+  "programs": {
+    "shadow": { "vertex": "shadow.vsh.metal", "fragment": "shadow.fsh.metal" },
+    "gbuffers_terrain": { "vertex": "terrain.vsh.metal", "fragment": "terrain.fsh.metal" }
+  },
+  "passes": [
+    { "stage": "deferred", "fragment": "deferred.fsh.metal", "inputs": ["colortex0", "colortex1", "depthtex0", "shadowtex0"], "outputs": ["colortex0"] },
+    { "stage": "composite", "fragment": "bloom_extract.fsh.metal", "inputs": ["colortex0"], "outputs": ["colortex2"] },
+    { "stage": "composite", "fragment": "bloom_blur_h.fsh.metal", "inputs": ["colortex2"], "outputs": ["colortex3"] },
+    { "stage": "composite", "fragment": "bloom_blur_v.fsh.metal", "inputs": ["colortex3"], "outputs": ["colortex2"] },
+    { "stage": "final", "fragment": "final.fsh.metal", "inputs": ["colortex0", "colortex2"], "outputs": ["colortex0"] }
+  ]
+}

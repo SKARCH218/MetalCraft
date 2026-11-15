@@ -24,6 +24,7 @@ import com.mojang.blaze3d.textures.GpuTextureView
 import dev.skarch.metalcraft.MetalCraft.LOGGER
 import dev.skarch.metalcraft.native.Mcn
 import dev.skarch.metalcraft.pipeline.ShaderPipeline
+import dev.skarch.metalcraft.upscale.Upscaler
 import net.minecraft.client.renderer.ShaderDefines
 import net.minecraft.resources.Identifier
 import org.lwjgl.glfw.GLFWNativeCocoa
@@ -238,6 +239,7 @@ internal class MetalDevice(private val defaultShaderSource: ShaderSource) : GpuD
 
     override fun close() {
         ShaderPipeline.deviceClosing()
+        Upscaler.deviceClosing()
         current = null
         // Pipelines queue their native objects for release; destroying the encoder then releases them.
         clearPipelineCache()

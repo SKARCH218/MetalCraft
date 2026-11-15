@@ -24,10 +24,16 @@ import dev.skarch.metalcraft.backend.MetalTexture
 import dev.skarch.metalcraft.backend.MetalTextureView
 import dev.skarch.metalcraft.backend.PackProgram
 import dev.skarch.metalcraft.config.MetalCraftConfig
+import dev.skarch.metalcraft.mixin.LevelRendererAccessor
+import dev.skarch.metalcraft.upscale.Upscaler
+import it.unimi.dsi.fastutil.objects.ObjectArrayList
 import net.fabricmc.loader.api.FabricLoader
 import net.minecraft.client.Minecraft
 import net.minecraft.client.renderer.RenderPipelines
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer
+import net.minecraft.client.renderer.chunk.ChunkSectionsToRender
+import net.minecraft.client.renderer.chunk.SectionRenderDispatcher
+import net.minecraft.core.BlockPos
 import net.minecraft.client.renderer.state.level.CameraRenderState
 import org.joml.Matrix4f
 import org.joml.Vector3f
@@ -47,9 +53,9 @@ import java.util.OptionalDouble
  *
  * and the game then draws the first-person hand and the GUI on top. Everything runs on the render thread.
  *
- * Not covered yet: entities and other non-terrain geometry in the shadow map and with pack programs, shadow
- * casters outside the camera's view, and the "improved transparency" setting (the pack is skipped while it
- * is on).
+ * Not covered yet: entities and other non-terrain geometry in the shadow map and with pack programs, shadows
+ * from terrain the game has not built yet (it only builds what the camera has seen), and the "improved
+ * transparency" setting (the pack is skipped while it is on).
  */
 object ShaderPipeline {
     const val PROPERTY = "metalcraft.shaderpack"
@@ -83,6 +89,12 @@ object ShaderPipeline {
     private val lightDirection = Vector3f()
     private val clearValue = Vector4f(0f, 0f, 0f, 0f)
     private val chunkSectionUniform = listOf("ChunkSection")
+    private val savedVisibleSections = ObjectArrayList<SectionRenderDispatcher.RenderSection>(10000)
+    private val sectionLookup = BlockPos.MutableBlockPos()
+    private val sectionCentre = Vector3f()
+    private var cameraX = 0.0
+    private var cameraY = 0.0
+    private var cameraZ = 0.0
 
     init {
         packs = ShaderPack.discover()
@@ -122,12 +134,13 @@ object ShaderPipeline {
         val minecraft = Minecraft.getInstance()
         val pack = activePack(device, minecraft) ?: return
         try {
-            val target = minecraft.gameRenderer.mainRenderTarget()
+            // With upscaling on, the world (and so the pack) works on the smaller images.
+            val target = Upscaler.worldTarget(minecraft)
             pack.resize(device, target.width, target.height)
             writeFrameUniforms(device, minecraft, pack, camera, projection, target.width, target.height)
             for (texture in pack.gbufferTextures) device.encoder.clearColorTexture(texture, clearValue)
             renderShadow(device, minecraft, pack)
-            gbuffer = pack.gbuffer(target.colorTexture!!)
+            gbuffer = pack.gbuffer(target.colorTexture)
             worldActive = true
         } catch (e: Exception) {
             fail(pack.pack.id, e)
@@ -143,8 +156,8 @@ object ShaderPipeline {
         val device = MetalDevice.current ?: return
         val pack = loaded ?: return
         try {
-            val target = Minecraft.getInstance().gameRenderer.mainRenderTarget()
-            pack.runPasses(device, target.colorTexture as MetalTexture, target.colorTextureView as MetalTextureView, target.depthTextureView as MetalTextureView)
+            val target = Upscaler.worldTarget(Minecraft.getInstance())
+            pack.runPasses(device, target.colorTexture, target.colorView, target.depthView)
         } catch (e: Exception) {
             fail(pack.pack.id, e)
         }
@@ -264,6 +277,9 @@ object ShaderPipeline {
         shadowModelView.get(256, data)
         shadowProjection.get(320, data)
         val position = camera.pos
+        cameraX = position.x
+        cameraY = position.y
+        cameraZ = position.z
         putVector(384, position.x.toFloat(), position.y.toFloat(), position.z.toFloat(), 0f)
         putVector(400, sunDirection.x, sunDirection.y, sunDirection.z, sunAngle)
         putVector(416, lightDirection.x, lightDirection.y, lightDirection.z, lightStrength)
@@ -287,12 +303,58 @@ object ShaderPipeline {
         frameData.putFloat(offset, x).putFloat(offset + 4, y).putFloat(offset + 8, z).putFloat(offset + 12, w)
     }
 
-    /** Draws the opaque terrain the camera can see from the light's point of view into the shadow map. */
+    /**
+     * The terrain to draw into the shadow map: every built section the shadow map covers, whether the camera
+     * looks at it or not. The game only builds its draw lists from its list of visible sections, so that list
+     * is swapped for the shadow casters while the lists are built and put back afterwards.
+     * Sections the game has never built (never seen since they loaded) cast no shadow.
+     */
+    private fun shadowSections(minecraft: Minecraft, pack: LoadedPack): ChunkSectionsToRender {
+        val renderer = minecraft.levelRenderer
+        val viewArea = (renderer as LevelRendererAccessor).`metalcraft$viewArea`()
+            ?: return renderer.prepareChunkRenders(shadowModelView)
+        val distance = pack.pack.shadowDistance
+        val reach = (distance / 16f).toInt() + 2
+        val limit = distance + SECTION_RADIUS
+        val centreX = Math.floor(cameraX).toInt() shr 4
+        val centreY = Math.floor(cameraY).toInt() shr 4
+        val centreZ = Math.floor(cameraZ).toInt() shr 4
+        val minY = maxOf(centreY - reach, viewArea.minSectionY())
+        val maxY = minOf(centreY + reach, viewArea.maxSectionY())
+        val visible = renderer.visibleSections()
+        savedVisibleSections.clear()
+        savedVisibleSections.addAll(visible)
+        visible.clear()
+        try {
+            for (x in centreX - reach..centreX + reach) {
+                for (z in centreZ - reach..centreZ + reach) {
+                    for (y in minY..maxY) {
+                        val section = viewArea.getRenderSectionAt(sectionLookup.set(x shl 4, y shl 4, z shl 4)) ?: continue
+                        val mesh = section.getSectionMesh()
+                        if (mesh.isEmpty(ChunkSectionLayer.SOLID) && mesh.isEmpty(ChunkSectionLayer.CUTOUT)) continue
+                        // Keep what falls inside the shadow map's square, seen from the light.
+                        sectionCentre.set(
+                            ((x shl 4) + 8 - cameraX).toFloat(), ((y shl 4) + 8 - cameraY).toFloat(), ((z shl 4) + 8 - cameraZ).toFloat(),
+                        )
+                        shadowModelView.transformPosition(sectionCentre)
+                        if (Math.abs(sectionCentre.x) > limit || Math.abs(sectionCentre.y) > limit) continue
+                        visible.add(section)
+                    }
+                }
+            }
+            return renderer.prepareChunkRenders(shadowModelView)
+        } finally {
+            visible.clear()
+            visible.addAll(savedVisibleSections)
+            savedVisibleSections.clear()
+        }
+    }
+
+    /** Draws the opaque terrain around the camera from the light's point of view into the shadow map. */
     private fun renderShadow(device: MetalDevice, minecraft: Minecraft, pack: LoadedPack) {
         val program = pack.shadow ?: return
         val shadowView = pack.shadowView ?: return
-        // The section list is the camera's; only the matrix written into each section's uniforms differs.
-        val sections = minecraft.levelRenderer.prepareChunkRenders(shadowModelView)
+        val sections = shadowSections(minecraft, pack)
         val resolution = pack.pack.shadowResolution
         val descriptor = RenderPassDescriptor.create { "MetalCraft shadow" }
             .withDepthAttachment(shadowView, OptionalDouble.of(1.0))
@@ -582,6 +644,9 @@ object ShaderPipeline {
     }
 
     private const val SHADOW_EYE_DISTANCE = 256f
+
+    /** Half the diagonal of a 16-block terrain section. */
+    private const val SECTION_RADIUS = 13.9f
     private const val WRITE_ALL = 15
     private const val COMPARE_LESS_EQUAL = 3
     private const val COMPARE_GREATER_EQUAL = 6

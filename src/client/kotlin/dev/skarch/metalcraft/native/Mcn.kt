@@ -55,6 +55,9 @@ internal object Mcn {
     @JvmField val copyTexture = bind("mcn_copy_texture", L, L, L, I, I, I, I, I, I, I)
     @JvmField val clearTextures = bind("mcn_clear_textures", L, L, F, F, F, F, L, D, I)
 
+    @JvmField val upscalerCreate = bind("mcn_upscaler_create", L, I, I, I, I, I, A)
+    @JvmField val upscalerEncode = bind("mcn_upscaler_encode", L, L, L, L, L, F, F, I, L)
+
     @JvmField val submit = bind("mcn_submit", L, A)
     @JvmField val waitSubmit = bind("mcn_wait_submit", L, L, L)
 
