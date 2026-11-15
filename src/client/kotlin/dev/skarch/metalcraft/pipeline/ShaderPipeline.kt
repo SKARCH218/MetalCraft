@@ -247,6 +247,9 @@ object ShaderPipeline {
      */
     internal fun hides(pipeline: RenderPipeline): Boolean = converted != null && gbuffer != null && pipeline in HIDDEN_PIPELINES
 
+    /** The converted pack the world is being drawn with right now, or null. Used by the Flywheel backend. */
+    internal fun activeConvertedPack(): ConvertedPack? = if (gbuffer != null) converted else null
+
     /** A pack program could not be used for a draw: the pack goes off and the game's own pipeline draws instead. */
     internal fun programFailed(error: Exception) {
         fail(loaded?.pack?.id ?: converted?.pack?.id ?: selected, error)

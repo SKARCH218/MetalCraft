@@ -85,6 +85,56 @@ internal class ConvertedPack(
 
     private class Program(val spec: ConvertedSpec.Program, val program: PackProgram, val slots: Array<Slot>, val stage: String)
 
+    /**
+     * What Flywheel's backend (`flywheel/MetalFlywheel.kt`) needs to draw Create's parts lit by this pack:
+     * the pack's entity program as GLSL. [vertex] lacks `mc_flywheel()`, which Flywheel's vertex code defines.
+     */
+    class FlywheelTemplate(val vertex: String, val fragment: String, val targets: IntArray)
+
+    /** A world program built from shaders translated elsewhere, with where its textures come from. */
+    class ExternalProgram internal constructor(val program: PackProgram, internal val slots: Array<Any>)
+
+    val flywheel: FlywheelTemplate? = spec.flywheel?.let {
+        FlywheelTemplate(pack.read(it.vertex), pack.read(it.fragment), spec.programs.getValue(it.program).targets)
+    }
+
+    /**
+     * Builds a program that writes this pack's buffers from already translated shaders. [entries] are the
+     * shaders' bindings with textures under their GLSL names; the block atlas name becomes `Sampler0`.
+     */
+    fun externalWorldProgram(
+        label: String, vertexMsl: String, fragmentMsl: String, entries: Array<BindingEntry>, targets: IntArray, format: VertexFormat,
+        cull: Boolean, depthCompare: Int, depthWrite: Boolean, blend: Boolean,
+    ): ExternalProgram {
+        val textures = entries.filter { it.kind == BindingEntry.TEXTURE }
+        val description = ConvertedSpec.Program(
+            label, "external", "", "",
+            textures.map { ConvertedSpec.Texture(it.name, Regex("depth2d<float> ${it.name}\\b").containsMatchIn(vertexMsl + fragmentMsl)) },
+            targets, IntArray(0), -1f,
+        )
+        val slots = slots(description, "gbuffers")
+        val bindings = Array(entries.size) { i ->
+            val entry = entries[i]
+            if (entry.kind == BindingEntry.TEXTURE) BindingEntry(BindingEntry.TEXTURE, slots[textures.indexOf(entry)].entryName, null, entry.index) else entry
+        }
+        val formats = IntArray(1 + spec.gbuffers.size) { if (it == 0) MetalFormats.code(GpuFormat.RGBA8_UNORM) else gbufferFormats[it - 1] }
+        val masks = IntArray(formats.size) { if (it > 0 && spec.gbuffers[it - 1] in targets) WRITE_ALL else 0 }
+        val blendMask = if (blend && 0 in targets) 1 shl (1 + spec.gbuffers.indexOf(0)) else 0
+        val compiled = PackProgram(
+            device, "${pack.id}/$label", vertexMsl, fragmentMsl, bindings, format, formats, masks, blendMask, depthCompare, depthWrite,
+            if (cull) 1 else 0, null, fastMath = true,
+        )
+        @Suppress("UNCHECKED_CAST")
+        return ExternalProgram(register(compiled, DEPTH_FORMAT), slots as Array<Any>)
+    }
+
+    /** Binds the pack's uniforms and textures for a draw with [external]. `Sampler0` is left to the caller. */
+    fun bindExternal(pass: MetalRenderPass, external: ExternalProgram, alphaTest: Float) {
+        pass.setUniform(PACK_UNIFORMS, frameSlice ?: return)
+        pass.setUniform(DRAW_UNIFORMS, drawUniforms(alphaTest))
+        for (slot in external.slots) bindSlot(pass, slot as Slot)
+    }
+
     /** What replaces one game pipeline: a program and the per-draw uniforms that go with it. */
     private class Draw(val program: Program, val uniforms: GpuBufferSlice)
 
@@ -579,7 +629,11 @@ internal class ConvertedPack(
     }
 
     private fun bindTextures(pass: MetalRenderPass, program: Program) {
-        for (slot in program.slots) {
+        for (slot in program.slots) bindSlot(pass, slot)
+    }
+
+    private fun bindSlot(pass: MetalRenderPass, slot: Slot) {
+        run {
             when (slot.source) {
                 SOURCE_GAME -> {}
                 SOURCE_IMAGE -> pass.bindTexture(slot.entryName, slot.image!!.view, if (slot.image.repeat) linearRepeat else linear)

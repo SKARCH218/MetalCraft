@@ -44,6 +44,7 @@ import dev.skarch.metalcraft.backend.MetalFormats
 import dev.skarch.metalcraft.backend.MetalPipeline
 import dev.skarch.metalcraft.backend.MetalRenderPass
 import dev.skarch.metalcraft.backend.PackProgram
+import dev.skarch.metalcraft.pipeline.ConvertedPack
 import dev.skarch.metalcraft.pipeline.ShaderPipeline
 import net.minecraft.client.Minecraft
 import net.minecraft.resources.Identifier
@@ -261,6 +262,7 @@ private class MetalDrawManager : DrawManager<MetalInstancer<*>>() {
     private val shaders = FlwShaders(Minecraft.getInstance().resourceManager)
     private val meshes = HashMap<Mesh, FlwMesh>()
     private val programs = HashMap<ProgramKey, PackProgram>()
+    private val packPrograms = HashMap<ProgramKey, ConvertedPack.ExternalProgram>()
     private val draws = ArrayList<FlwDraw>()
     private var needSort = false
 
@@ -269,7 +271,7 @@ private class MetalDrawManager : DrawManager<MetalInstancer<*>>() {
     private var lightLut: GpuBuffer? = null
     private var lightSections: GpuBuffer? = null
 
-    private data class ProgramKey(val shader: FlwShaderKey, val state: Int, val packSlot: Int, val packFormats: List<Int>)
+    private data class ProgramKey(val shader: FlwShaderKey, val state: Int, val packSlot: Int, val packFormats: List<Int>, val pack: Any? = null)
 
     override fun <I : Instance> create(key: InstancerKey<I>): MetalInstancer<*> = MetalInstancer(key, AbstractInstancer.Recreate(key, this))
 
@@ -319,12 +321,15 @@ private class MetalDrawManager : DrawManager<MetalInstancer<*>>() {
             val player = upload(transient, PlayerUniforms::class.java)
             val level = upload(transient, LevelUniforms::class.java)
             val gbuffer = ShaderPipeline.gbuffer
+            // With a converted shader pack the parts are drawn by the pack's own entity program.
+            val pack = ShaderPipeline.activeConvertedPack()?.takeIf { it.flywheel != null }
             val samplers = RenderSystem.getSamplerCache()
             for (draw in draws) {
                 val instances = draw.instancer.buffer ?: continue
                 val material = draw.material
-                val program = program(draw, gbuffer)
-                pass.setProgram(program)
+                val lit = if (pack != null) packProgram(draw, pack) else null
+                pass.setProgram(lit?.program ?: program(draw, gbuffer))
+                if (lit != null) pack!!.bindExternal(pass, lit, alphaTest(material))
                 pass.setUniform("_FlwFrameUniforms", frame)
                 pass.setUniform("_FlwFogUniforms", fog)
                 pass.setUniform("_FlwOptionsUniforms", options)
@@ -338,7 +343,7 @@ private class MetalDrawManager : DrawManager<MetalInstancer<*>>() {
                 val filter = if (material.blur()) FilterMode.LINEAR else FilterMode.NEAREST
                 val own = texture.sampler
                 pass.bindTexture(
-                    "flw_diffuseTex", texture.textureView,
+                    if (lit != null) "Sampler0" else "flw_diffuseTex", texture.textureView,
                     samplers.getSampler(own.addressModeU, own.addressModeV, filter, filter, material.mipmap()),
                 )
                 pass.bindTexture("flw_overlayTex", minecraft.gameRenderer.overlayTexture().textureView, samplers.getClampToEdge(FilterMode.NEAREST))
@@ -411,18 +416,51 @@ private class MetalDrawManager : DrawManager<MetalInstancer<*>>() {
         }
     }
 
-    private fun program(draw: FlwDraw, gbuffer: ShaderPipeline.Gbuffer?): PackProgram {
+    private fun shaderKey(draw: FlwDraw): FlwShaderKey {
         val material = draw.material
         MaterialShaderIndices.fogSources().index(material.fog().source())
         MaterialShaderIndices.cutoutSources().index(material.cutout().source())
-        val shaderKey = FlwShaderKey(
+        return FlwShaderKey(
             draw.instancer.type, draw.environment.contextShader(), material.light().source(), material.shaders(),
             material.cutout() != CutoutShaders.OFF, MaterialShaderIndices.fogSources().all().size, MaterialShaderIndices.cutoutSources().all().size,
         )
+    }
+
+    private fun stateBits(material: Material): Int = (if (material.backfaceCulling()) 1 else 0) or (material.depthTest().ordinal shl 1) or
+        (material.writeMask().ordinal shl 5) or (material.transparency().ordinal shl 8)
+
+    /** The alpha below which the pack's program drops a pixel, from the material's cutout shader. */
+    private fun alphaTest(material: Material): Float = when (material.cutout()) {
+        CutoutShaders.OFF -> -1f
+        CutoutShaders.HALF -> 0.5f
+        CutoutShaders.ONE_TENTH -> 0.1f
+        else -> 0.0001f
+    }
+
+    private fun packProgram(draw: FlwDraw, pack: ConvertedPack): ConvertedPack.ExternalProgram {
+        val material = draw.material
+        // Only the vertex side of Flywheel's shaders is used here: the pack's fragment stage does the rest.
+        val full = shaderKey(draw)
+        val shaderKey = FlwShaderKey(full.type, full.context, FLAT_LIGHT, full.shaders, false, 0, 0)
+        val key = ProgramKey(shaderKey, stateBits(material), 0, emptyList(), pack)
+        return packPrograms.getOrPut(key) {
+            val template = pack.flywheel!!
+            val translated = shaders.getPackLit(device, shaderKey, template)
+            val depth = material.depthTest()
+            pack.externalWorldProgram(
+                "flywheel ${shaderKey.type.vertexShader().path}", translated.vertexMsl, translated.fragmentMsl, translated.entries, template.targets,
+                FlwMesh.FORMAT, material.backfaceCulling(), if (depth == DepthTest.OFF) -1 else DEPTH_COMPARE.getValue(depth),
+                material.writeMask().depth(), material.transparency() != Transparency.OPAQUE,
+            )
+        }
+    }
+
+    private fun program(draw: FlwDraw, gbuffer: ShaderPipeline.Gbuffer?): PackProgram {
+        val material = draw.material
+        val shaderKey = shaderKey(draw)
         // A transparency Metal has no blend state for yet is drawn as plain translucency.
         val transparency = material.transparency()
-        val state = (if (material.backfaceCulling()) 1 else 0) or (material.depthTest().ordinal shl 1) or
-            (material.writeMask().ordinal shl 5) or (transparency.ordinal shl 8)
+        val state = stateBits(material)
         val slot = gbuffer?.colorSlot ?: -1
         val key = ProgramKey(shaderKey, state, slot, gbuffer?.formats?.toList() ?: emptyList())
         return programs.getOrPut(key) {
@@ -480,6 +518,9 @@ private class MetalDrawManager : DrawManager<MetalInstancer<*>>() {
 
     private companion object {
         const val WRITE_ALL = 15
+
+        // Stands in for the light shader in the key of pack-lit programs, where Flywheel's is not used.
+        val FLAT_LIGHT: Identifier = Identifier.fromNamespaceAndPath("flywheel", "light/flat.glsl")
 
         // Flywheel's depth tests already follow the game's reversed depth.
         val DEPTH_COMPARE = mapOf(

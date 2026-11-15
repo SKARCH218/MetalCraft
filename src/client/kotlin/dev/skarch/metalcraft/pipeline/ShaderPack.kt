@@ -212,6 +212,13 @@ internal class ConvertedSpec(json: JsonObject, dimension: String) {
     }
     val passes: List<String> = part.getAsJsonArray("passes").map { it.asString }
 
+    /** GLSL of the program Flywheel instances are drawn with (see `ConvertedPack.flywheel`), or null. */
+    class Flywheel(val program: String, val vertex: String, val fragment: String)
+
+    val flywheel: Flywheel? = part.getAsJsonObject("flywheel")?.let {
+        Flywheel(it.get("program").asString, it.get("vertex").asString, it.get("fragment").asString)
+    }
+
     /** The program that draws the sky as a full-screen pass before the world, or null. */
     val sky: String? = part.get("sky")?.asString
     val programs: Map<String, Program> = part.getAsJsonObject("programs").entrySet().associate { (name, value) ->

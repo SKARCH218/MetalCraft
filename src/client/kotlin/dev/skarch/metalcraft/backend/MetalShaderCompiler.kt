@@ -122,9 +122,9 @@ internal class MetalShaderCompiler : AutoCloseable {
     fun translateStandalone(
         vertexSpirv: ByteBuffer, fragmentSpirv: ByteBuffer, bufferIndex: (String) -> Int, attributes: List<String>,
     ): TranslatedShaders {
-        val vertex = Stage(vertexSpirv)
+        val vertex = Stage(vertexSpirv, usedOnly = true)
         try {
-            val fragment = Stage(fragmentSpirv)
+            val fragment = Stage(fragmentSpirv, usedOnly = true)
             try {
                 val entries = ArrayList<BindingEntry>()
                 for (stage in arrayOf(vertex, fragment)) {
@@ -241,8 +241,11 @@ internal class MetalShaderCompiler : AutoCloseable {
 
     private class Resource(val id: Int, val name: String, val dimension: Int)
 
-    /** One shader stage loaded into SPIRV-Cross, with the resources it declares. */
-    private class Stage(spirv: ByteBuffer) : AutoCloseable {
+    /**
+     * One shader stage loaded into SPIRV-Cross, with the resources it declares, or with [usedOnly] only
+     * those its code really uses (large shaders declare many more textures than Metal has room for).
+     */
+    private class Stage(spirv: ByteBuffer, usedOnly: Boolean = false) : AutoCloseable {
         val context: Long
         val compiler: Long
         val uniformBuffers: List<Resource>
@@ -264,8 +267,18 @@ internal class MetalShaderCompiler : AutoCloseable {
                         "Couldn't create compiler",
                     )
                     compiler = pointer.get(0)
-                    expect(Spvc.spvc_compiler_create_shader_resources(compiler, pointer), "Couldn't create resource list")
+                    if (usedOnly) {
+                        expect(Spvc.spvc_compiler_get_active_interface_variables(compiler, pointer), "Couldn't find the used variables")
+                        val active = pointer.get(0)
+                        expect(Spvc.spvc_compiler_create_shader_resources_for_active_variables(compiler, pointer, active), "Couldn't create resource list")
+                    } else {
+                        expect(Spvc.spvc_compiler_create_shader_resources(compiler, pointer), "Couldn't create resource list")
+                    }
                     val resources = pointer.get(0)
+                    if (usedOnly) {
+                        expect(Spvc.spvc_compiler_get_active_interface_variables(compiler, pointer), "Couldn't find the used variables")
+                        expect(Spvc.spvc_compiler_set_enabled_interface_variables(compiler, pointer.get(0)), "Couldn't limit the interface")
+                    }
                     uniformBuffers = list(stack, resources, Spvc.SPVC_RESOURCE_TYPE_UNIFORM_BUFFER, false)
                     storageBuffers = list(stack, resources, Spvc.SPVC_RESOURCE_TYPE_STORAGE_BUFFER, false)
                     images = list(stack, resources, Spvc.SPVC_RESOURCE_TYPE_SAMPLED_IMAGE, true)

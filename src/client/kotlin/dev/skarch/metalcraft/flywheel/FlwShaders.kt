@@ -19,6 +19,7 @@ import com.zurrtum.create.client.flywheel.lib.material.CutoutShaders
 import com.zurrtum.create.client.flywheel.lib.util.ResourceUtil
 import dev.skarch.metalcraft.backend.MetalDevice
 import dev.skarch.metalcraft.backend.TranslatedShaders
+import dev.skarch.metalcraft.pipeline.ConvertedPack
 import net.minecraft.resources.Identifier
 import net.minecraft.server.packs.resources.ResourceManager
 import org.lwjgl.system.MemoryUtil
@@ -41,6 +42,7 @@ internal data class FlwShaderKey(
 internal class FlwShaders(resources: ResourceManager) {
     private val sources = ShaderSources(resources)
     private val cache = HashMap<FlwShaderKey, TranslatedShaders>()
+    private val packCache = HashMap<Pair<FlwShaderKey, ConvertedPack.FlywheelTemplate>, TranslatedShaders>()
 
     init {
         // Registering a new fog or cutout shader makes Flywheel rebuild its own programs from these sources,
@@ -89,6 +91,39 @@ internal class FlwShaders(resources: ResourceManager) {
         }
     }
 
+    /**
+     * The shaders of a program that draws Flywheel instances lit by a shader pack: the pack's entity
+     * program ([template], GLSL from the converter) with Flywheel's vertex code in front of it. Flywheel's
+     * code works out where the vertex is; the pack's code takes it from there.
+     */
+    fun getPackLit(device: MetalDevice, key: FlwShaderKey, template: ConvertedPack.FlywheelTemplate): TranslatedShaders =
+        packCache.getOrPut(key to template) {
+            val flywheel = assemble("VERTEX_SHADER", key, false) {
+                listOf(
+                    sources.get(ResourceUtil.rl("internal/api_impl.vert")),
+                    InstanceStructComponent(key.type),
+                    sources.get(key.type.vertexShader()),
+                    sources.get(key.shaders.vertexSource()),
+                    sources.get(ResourceUtil.rl("internal/vertex_input.vert")),
+                    BufferTextureInstanceComponent(key.type),
+                    sources.get(ResourceUtil.rl("internal/instancing/main.vert")),
+                )
+            }
+            val vertex = template.vertex + "\n#define main _flw_entry\n" + adapt(flywheel, false) + "\n#undef main\n" + PACK_GLUE
+            val name = key.type.vertexShader().path
+            val vertexSpirv = device.shaderCompiler.compileSpirv("flywheel/pack/$name.vsh", vertex, ShaderType.VERTEX)
+            try {
+                val fragmentSpirv = device.shaderCompiler.compileSpirv("flywheel/pack/$name.fsh", template.fragment, ShaderType.FRAGMENT)
+                try {
+                    device.shaderCompiler.translateStandalone(vertexSpirv, fragmentSpirv, ::packBufferIndex, ATTRIBUTES)
+                } finally {
+                    MemoryUtil.memFree(fragmentSpirv)
+                }
+            } finally {
+                MemoryUtil.memFree(vertexSpirv)
+            }
+        }
+
     private fun fogComponent(): SourceComponent = UberShaderComponent.builder(ResourceUtil.rl("fog"))
         .materialSources(MaterialShaderIndices.fogSources().all())
         .adapt(FnSignature.create().returnType("vec4").name("flw_fogFilter").arg("vec4", "color").build(), GlslExpr.variable("color"))
@@ -120,7 +155,7 @@ internal class FlwShaders(resources: ResourceManager) {
         into.addAll(component.included())
     }
 
-    private fun adapt(glsl: String): String {
+    private fun adapt(glsl: String, standalone: Boolean = true): String {
         val body = StringBuilder(glsl.length)
         for (line in glsl.lineSequence()) {
             when {
@@ -134,7 +169,7 @@ internal class FlwShaders(resources: ResourceManager) {
             .replace("texelFetch(_flw_lightLut, int(index)).r", "_flw_lightLutData[index]")
             .replace("texelFetch(_flw_lightSections, int(index)).r", "_flw_lightSectionData[index]")
         text = indexInstances(text)
-        return "#version 450\n$BLOCKS$text"
+        return (if (standalone) "#version 450\n" else "") + BLOCKS + text
     }
 
     /** `texelFetch(_flw_instances, <expr>)` becomes `_flw_instanceTexels[<expr>]`. */
@@ -180,6 +215,26 @@ internal class FlwShaders(resources: ResourceManager) {
         )
 
         fun bufferIndex(name: String): Int = BUFFERS.indexOf(name).also { require(it >= 0) { "Unknown Flywheel uniform block $name" } }
+
+        /** Buffer indices of a program that also has a shader pack's blocks: those keep their own low indices. */
+        fun packBufferIndex(name: String): Int = when (name) {
+            "PackUniforms" -> 0
+            "DrawUniforms" -> 1
+            else -> 10 + bufferIndex(name)
+        }
+
+        // Runs Flywheel's vertex code and hands its result to the pack's vertex code (see the converter's
+        // FLYWHEEL_INPUTS). Flywheel positions are relative to its render origin, the pack's to the camera.
+        private val PACK_GLUE = """
+            void mc_flywheel() {
+                _flw_entry();
+                mc_flwVertex = vec4(flw_vertexPos.xyz - flw_cameraPos, 1.0);
+                mc_flwNormal = flw_vertexNormal;
+                mc_flwColor = flw_vertexColor;
+                mc_flwTexCoord = flw_vertexTexCoord;
+                mc_flwLight = flw_vertexLight * 256.0;
+            }
+        """.trimIndent() + "\n"
 
         private val LOOSE_UNIFORM = Regex("""^\s*uniform\s+(bool|int|uint|float|[iu]?vec[234]|mat[34])\s+[^;]*;.*$""")
 

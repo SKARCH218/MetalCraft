@@ -54,6 +54,12 @@ private enum class Kind(val world: Boolean) {
 
     /** The sun and the moon: position and texture coordinate only. */
     CELESTIAL(true),
+
+    /**
+     * Flywheel instances (Create's moving parts). Only a vertex template is written: the engine appends
+     * Flywheel's own vertex code, which supplies the vertex, at run time.
+     */
+    FLYWHEEL(true),
     SHADOW(false),
     FULLSCREEN(false),
 }
@@ -87,6 +93,7 @@ private val ENGINE_UNIFORMS = listOf("vec4" to "mc_fog", "mat4" to "mc_bob")
 
 private const val UNIFORM_BLOCK = "PackUniforms"
 private const val SKY_PROGRAM = "gbuffers_skybasic"
+private const val FLYWHEEL_SOURCE = "gbuffers_entities"
 
 /** The pack's program folders: the Overworld (and every other dimension), the Nether, the End. */
 private val DIMENSION_FOLDERS = listOf("world0", "world-1", "world1")
@@ -255,6 +262,23 @@ private class Converter(private val source: Path, private val output: Path, priv
             manifestPrograms.keySet().filter { kindOf(it) == Kind.FULLSCREEN && it != SKY_PROGRAM }.sortedBy(::passOrder).forEach(array::add)
         })
         if (manifestPrograms.has(SKY_PROGRAM)) manifest.addProperty("sky", SKY_PROGRAM)
+        // Flywheel instances are drawn with the entity program's fragment stage and a vertex stage the
+        // engine completes at run time, so both are kept as GLSL.
+        val entities = programs.firstOrNull { it.name == FLYWHEEL_SOURCE }
+        if (entities != null && manifestPrograms.has(FLYWHEEL_SOURCE)) {
+            try {
+                val template = finish(Program("flywheel", Kind.FLYWHEEL, entities.vertex, entities.fragment), Stage.VERTEX, entities.vertex, uniforms)
+                Files.writeString(debug.resolve("flywheel.vsh.glsl"), template.text)
+                manifest.add("flywheel", JsonObject().also {
+                    it.addProperty("program", FLYWHEEL_SOURCE)
+                    it.addProperty("vertex", "$folder/_glsl/flywheel.vsh.glsl")
+                    it.addProperty("fragment", "$folder/_glsl/$FLYWHEEL_SOURCE.fsh.glsl")
+                })
+            } catch (e: ConvertException) {
+                failures++
+                report(entities, e)
+            }
+        }
         manifest.add("programs", manifestPrograms)
         return manifest to failures
     }
@@ -459,6 +483,7 @@ private class Converter(private val source: Path, private val output: Path, priv
                     Kind.ENTITY -> DYNAMIC_TRANSFORMS + ENTITY_INPUTS + matrices("mc_bob * ModelViewMat", "gbufferProjection")
                     Kind.PARTICLE -> DYNAMIC_TRANSFORMS + PARTICLE_INPUTS + matrices("mc_bob * ModelViewMat", "gbufferProjection")
                     Kind.CELESTIAL -> DYNAMIC_TRANSFORMS + CELESTIAL_INPUTS + matrices("mc_bob * ModelViewMat", "gbufferProjection")
+                    Kind.FLYWHEEL -> FLYWHEEL_INPUTS + matrices("gbufferModelView", "gbufferProjection")
                     Kind.SHADOW -> TERRAIN_INPUTS + matrices("shadowModelView", "shadowProjection")
                     Kind.FULLSCREEN -> FULLSCREEN_INPUTS + matrices("mat4(1.0)", "mat4(1.0)")
                 },
@@ -468,7 +493,8 @@ private class Converter(private val source: Path, private val output: Path, priv
         }
         if (program.kind != Kind.FULLSCREEN) prelude.append(DRAW_UNIFORMS)
         prelude.append("#define main mc_main\n")
-        val epilogue = "\n#undef main\nvoid main() {\n    mc_main();\n" + when {
+        val before = if (stage == Stage.VERTEX && program.kind == Kind.FLYWHEEL) "    mc_flywheel();\n" else ""
+        val epilogue = "\n#undef main\nvoid main() {\n$before    mc_main();\n" + when {
             stage == Stage.VERTEX && program.kind.world -> "    gl_Position.z = 0.5 * (gl_Position.w - gl_Position.z);\n"
             stage == Stage.VERTEX && program.kind == Kind.SHADOW -> "    gl_Position.z = 0.5 * (gl_Position.z + gl_Position.w);\n"
             // The alpha test OpenGL used to do after the shader.
@@ -802,6 +828,27 @@ private class Converter(private val source: Path, private val output: Path, priv
             #define gl_Color ColorModulator
             #define gl_MultiTexCoord0 vec4(UV0, 0.0, 1.0)
             #define gl_MultiTexCoord1 vec4(240.0, 240.0, 0.0, 1.0)
+        """.trimIndent() + "\n"
+
+        /**
+         * The vertex as Flywheel's vertex code leaves it: position relative to the camera, world axes.
+         * `mc_flywheel()` is defined by the engine and fills these before the pack's code runs.
+         */
+        val FLYWHEEL_INPUTS = """
+            vec4 mc_flwVertex;
+            vec3 mc_flwNormal;
+            vec4 mc_flwColor;
+            vec2 mc_flwTexCoord;
+            vec2 mc_flwLight;
+            void mc_flywheel();
+            #define gl_Vertex mc_flwVertex
+            #define gl_Normal mc_flwNormal
+            #define gl_Color mc_flwColor
+            #define gl_MultiTexCoord0 vec4(mc_flwTexCoord, 0.0, 1.0)
+            #define gl_MultiTexCoord1 vec4(mc_flwLight, 0.0, 1.0)
+            #define mc_Entity vec4(-1.0)
+            #define mc_midTexCoord vec4(mc_flwTexCoord, 0.0, 1.0)
+            #define at_tangent vec4(1.0, 0.0, 0.0, 1.0)
         """.trimIndent() + "\n"
 
         /** One triangle that covers the target, in place of the full-screen quad OpenGL packs are given. */
