@@ -263,6 +263,17 @@ private class Harness(private val context: ClientGameTestContext) {
                 worldScene("ocean", world, OVERWORLD, view)
             }
 
+            if (selected("underwater")) {
+                world.server.runCommand("time set 6000")
+                val ocean = world.server.onServer { server ->
+                    server.overworld().findClosestBiome3d({ it.`is`(Biomes.OCEAN) || it.`is`(Biomes.DEEP_OCEAN) }, plains, 6400, 32, 64)?.first
+                        ?: throw AssertionError("No ocean biome near $plains")
+                }
+                // A few blocks below the surface, looking slightly up towards it.
+                val view = Viewpoint(ocean.x + 0.5, SEA_LEVEL - 5.0, ocean.z + 0.5, 0f, -10f)
+                worldScene("underwater", world, OVERWORLD, view)
+            }
+
             if (selected("night_torches")) {
                 world.server.runCommand("time set 18000")
                 val view = Viewpoint(plains.x + 0.5, plains.y + 2.0, plains.z + 0.5, -90f, 15f)
@@ -615,7 +626,7 @@ private class Harness(private val context: ClientGameTestContext) {
         const val OVERWORLD = "minecraft:overworld"
         const val NETHER = "minecraft:the_nether"
 
-        val NORMAL_WORLD_SCENES = listOf("plains_day", "ocean", "night_torches", "cave", "nether")
+        val NORMAL_WORLD_SCENES = listOf("plains_day", "ocean", "underwater", "night_torches", "cave", "nether")
         val FLAT_WORLD_SCENES = listOf("entities", "gui_inventory", "after_reload", "gui_chat", "entities_fx", "gui_f3")
         val ALL_SCENES = (NORMAL_WORLD_SCENES + FLAT_WORLD_SCENES).toSet()
 

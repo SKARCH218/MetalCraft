@@ -36,7 +36,7 @@ internal class MetalRenderPass(private val device: MetalDevice, private val enco
     private var bindingsDirty = false
     private var debugGroups = 0
 
-    // Set while the selected game pipeline has no counterpart in the active shader pack: its draws are dropped.
+    // Set while the selected game pipeline draws what the active shader pack draws in its own way.
     private var skipDraws = false
 
     private var areaX = 0
@@ -94,7 +94,7 @@ internal class MetalRenderPass(private val device: MetalDevice, private val enco
             ShaderPipeline.programFailed(e)
             null
         }
-        skipDraws = replacement == null && extraTargets != null && ShaderPipeline.hidesGameDraws()
+        skipDraws = replacement == null && extraTargets != null && ShaderPipeline.hides(pipeline)
         if (skipDraws) return
         if (replacement != null) {
             try {

@@ -26,6 +26,7 @@ import dev.skarch.metalcraft.upscale.Upscaler
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap
 import net.minecraft.client.Minecraft
 import net.minecraft.client.renderer.RenderPipelines
+import net.minecraft.client.renderer.chunk.ChunkSectionsToRender
 import net.minecraft.client.renderer.state.level.CameraRenderState
 import net.minecraft.client.renderer.texture.TextureAtlas
 import net.minecraft.core.BlockPos
@@ -52,18 +53,17 @@ import java.util.OptionalDouble
  * A frame:
  *   shadow                      terrain from the light into shadowtex and shadowcolor
  *   sky                         the pack's sky program as a full-screen pass
- *   gbuffers (opaque)           the game draws the world; terrain uses the pack's programs, which write the
- *                               pack's buffers attached after the game's image. Game pipelines the pack has
- *                               no program for yet are not drawn at all
+ *   gbuffers (opaque)           the game draws the world; terrain, entities, particles and the sun and moon
+ *                               use the pack's programs, which write the pack's buffers attached after the
+ *                               game's image. Everything else is drawn by the game's own shader into the
+ *                               pack's colour image (`MetalPipeline.variant`), unlit by the pack
  *   deferred                    full-screen passes, run right before the game draws translucent terrain
  *   gbuffers (translucent)      water and the like
  *   composite, final            full-screen passes; `final` writes the game's image
  *
- * Entities, particles and the sun and moon use the pack's programs too (`createSubstitute`). Not covered yet:
- * weather, lines, blocks moved by pistons and falling blocks (the game's `core/block` pipelines, which are
- * dropped like every pipeline without a pack program), the hand (the game draws it afterwards with its own
- * shader), translucent and entity
- * shadows, per-entity uniforms, the pack's options, the Nether and the End.
+ * Not covered yet: pack programs for weather, lines, moving blocks and the like (see above), the hand (the
+ * game draws it afterwards with its own shader), translucent and entity shadows, per-entity uniforms, the
+ * pack's options.
  */
 internal class ConvertedPack(
     private val device: MetalDevice, val pack: ShaderPack, private val spec: ConvertedSpec,
@@ -111,8 +111,12 @@ internal class ConvertedPack(
     private var depth0View: MetalTextureView? = null
     private var depth1Texture: MetalTexture? = null
     private var depth1View: MetalTextureView? = null
+    // shadowtex1: what opaque terrain casts. shadowtex0: the same plus translucent terrain such as water.
+    // A pack compares the two to find light that has passed through water or stained glass.
     private val shadowDepth: MetalTexture
     private val shadowDepthView: MetalTextureView
+    private val shadowDepthAll: MetalTexture
+    private val shadowDepthAllView: MetalTextureView
     private val shadowColors: Array<MetalTexture>
     private val shadowColorViews: Array<MetalTextureView>
 
@@ -188,6 +192,10 @@ internal class ConvertedPack(
             "MetalCraft shadowtex", GpuTexture.USAGE_RENDER_ATTACHMENT or GpuTexture.USAGE_TEXTURE_BINDING, GpuFormat.D32_FLOAT, resolution, resolution, 1, 1,
         ) as MetalTexture
         shadowDepthView = device.createTextureView(shadowDepth) as MetalTextureView
+        shadowDepthAll = device.createTexture(
+            "MetalCraft shadowtex0", GpuTexture.USAGE_RENDER_ATTACHMENT or GpuTexture.USAGE_TEXTURE_BINDING, GpuFormat.D32_FLOAT, resolution, resolution, 1, 1,
+        ) as MetalTexture
+        shadowDepthAllView = device.createTextureView(shadowDepthAll) as MetalTextureView
         shadowColors = Array(2) { colorTexture("shadowcolor$it", GpuFormat.RGBA8_UNORM, resolution, resolution) }
         shadowColorViews = Array(2) { device.createTextureView(shadowColors[it]) as MetalTextureView }
         drawShadow = drawUniforms(0.1f)
@@ -280,7 +288,7 @@ internal class ConvertedPack(
             name.startsWith("colortex") -> Slot(texture.name, SOURCE_COLOR, color(name.removePrefix("colortex").toInt()).spec.index, false, null)
             name == "depthtex0" -> Slot(texture.name, SOURCE_DEPTH0, 0, false, null)
             name == "depthtex1" || name == "depthtex2" -> Slot(texture.name, SOURCE_DEPTH1, 0, false, null)
-            name == "shadowtex0" || name == "shadowtex1" -> Slot(texture.name, SOURCE_SHADOW_DEPTH, 0, texture.compare, null)
+            name == "shadowtex0" || name == "shadowtex1" -> Slot(texture.name, SOURCE_SHADOW_DEPTH, name.last() - '0', texture.compare, null)
             name == "shadowcolor0" || name == "shadowcolor1" -> Slot(texture.name, SOURCE_SHADOW_COLOR, name.last() - '0', false, null)
             else -> throw IllegalArgumentException("${program.name} reads '${texture.name}', which the engine does not provide")
         }
@@ -410,10 +418,10 @@ internal class ConvertedPack(
         for (i in gbufferHandles.indices) gbufferHandles[i] = color(spec.gbuffers[i]).view!!.handle
         val existing = gbufferState
         if (existing != null && existing.mainColor === mainColor) return existing
-        return ShaderPipeline.Gbuffer(mainColor, gbufferHandles, gbufferFormats).also { gbufferState = it }
+        return ShaderPipeline.Gbuffer(mainColor, gbufferHandles, gbufferFormats, spec.gbuffers.indexOf(0)).also { gbufferState = it }
     }
 
-    /** The pack's program for a game pipeline, or null when the pack has none (the draw is then dropped). */
+    /** The pack's program for a game pipeline, or null when the pack has none (the game's own shader then draws). */
     fun substitute(pipeline: RenderPipeline): PackProgram? {
         val draw = if (substitutes.containsKey(pipeline)) substitutes[pipeline] else createSubstitute(pipeline).also { substitutes[pipeline] = it }
         currentProgram = draw?.program
@@ -484,10 +492,17 @@ internal class ConvertedPack(
         val position = camera.pos
         device.encoder.clearColorTexture(shadowColors[0], clearWhite)
         device.encoder.clearColorTexture(shadowColors[1], clearWhite)
-        val sections = ShaderPipeline.shadowSections(minecraft, shadowModelView, spec.shadowDistance, position.x, position.y, position.z)
+        val sections = ShaderPipeline.shadowSections(minecraft, shadowModelView, spec.shadowDistance, position.x, position.y, position.z, true)
+        // Opaque terrain alone first, then everything: the second pass leaves the colours of what is
+        // nearest to the light, translucent or not.
+        drawShadow(program, sections, shadowDepthView, false)
+        drawShadow(program, sections, shadowDepthAllView, true)
+    }
+
+    private fun drawShadow(program: Program, sections: ChunkSectionsToRender, depth: MetalTextureView, withTranslucent: Boolean) {
         val descriptor = RenderPassDescriptor.create { "MetalCraft shadow" }
         for (i in program.spec.targets.indices) descriptor.withColorAttachment(shadowColorViews[program.spec.targets[i]])
-        descriptor.withDepthAttachment(shadowDepthView, OptionalDouble.of(1.0))
+        descriptor.withDepthAttachment(depth, OptionalDouble.of(1.0))
             .withRenderArea(RenderPass.RenderArea(0, 0, spec.shadowResolution, spec.shadowResolution))
         val pass = device.encoder.createRenderPass(descriptor) as MetalRenderPass
         try {
@@ -497,7 +512,7 @@ internal class ConvertedPack(
             RenderSystem.getGlobalSettingsUniform()?.let { pass.setUniform("Globals", it) }
             pass.bindTexture("Sampler0", sections.textureView(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST))
             bindTextures(pass, program)
-            ShaderPipeline.drawShadowTerrain(pass, sections)
+            ShaderPipeline.drawShadowTerrain(pass, sections, withTranslucent)
         } finally {
             device.encoder.submitRenderPass()
         }
@@ -571,7 +586,9 @@ internal class ConvertedPack(
                 SOURCE_COLOR -> pass.bindTexture(slot.entryName, color(slot.index).view!!, linear)
                 SOURCE_DEPTH0 -> pass.bindTexture(slot.entryName, depth0View!!, nearest)
                 SOURCE_DEPTH1 -> pass.bindTexture(slot.entryName, depth1View!!, nearest)
-                SOURCE_SHADOW_DEPTH -> pass.bindTexture(slot.entryName, shadowDepthView, if (slot.compare) shadowCompare else nearest)
+                SOURCE_SHADOW_DEPTH -> pass.bindTexture(
+                    slot.entryName, if (slot.index == 0) shadowDepthAllView else shadowDepthView, if (slot.compare) shadowCompare else nearest,
+                )
                 else -> pass.bindTexture(slot.entryName, shadowColorViews[slot.index], linear)
             }
         }
@@ -849,6 +866,8 @@ internal class ConvertedPack(
         for (texture in shadowColors) texture.close()
         shadowDepthView.close()
         shadowDepth.close()
+        shadowDepthAllView.close()
+        shadowDepthAll.close()
         linear.close()
         nearest.close()
         linearRepeat.close()

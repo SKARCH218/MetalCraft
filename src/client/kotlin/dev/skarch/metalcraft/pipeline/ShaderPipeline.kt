@@ -65,8 +65,11 @@ object ShaderPipeline {
     private const val FRAME_UNIFORMS = "FrameUniforms"
     private const val FRAME_UNIFORMS_SIZE = 512
 
-    /** The pack's extra colour targets, attached to passes that draw into the game image. */
-    internal class Gbuffer(val mainColor: GpuTexture, val handles: LongArray, val formats: IntArray)
+    /**
+     * The pack's extra colour targets, attached to passes that draw into the game image. [colorSlot] is the
+     * one among them that holds the pack's picture of the world, or -1 if that is the game image itself.
+     */
+    internal class Gbuffer(val mainColor: GpuTexture, val handles: LongArray, val formats: IntArray, val colorSlot: Int = -1)
 
     /** Non-null while the game draws the world with a pack active. Read by the backend for every pass. */
     @JvmField
@@ -238,10 +241,11 @@ object ShaderPipeline {
     }
 
     /**
-     * Whether game pipelines without a pack program are left out of the world. A converted pack draws the
-     * world into its own buffers, where the game's shaders have nothing to add.
+     * Whether a game pipeline without a pack program is left out of the world: what a converted pack draws
+     * itself in another way (the sky, its own clouds, shadows). Everything else is drawn by the game's
+     * shader into the pack's colour image.
      */
-    internal fun hidesGameDraws(): Boolean = converted != null && gbuffer != null
+    internal fun hides(pipeline: RenderPipeline): Boolean = converted != null && gbuffer != null && pipeline in HIDDEN_PIPELINES
 
     /** A pack program could not be used for a draw: the pack goes off and the game's own pipeline draws instead. */
     internal fun programFailed(error: Exception) {
@@ -401,6 +405,7 @@ object ShaderPipeline {
      */
     internal fun shadowSections(
         minecraft: Minecraft, shadowModelView: Matrix4f, distance: Float, cameraX: Double, cameraY: Double, cameraZ: Double,
+        withTranslucent: Boolean = false,
     ): ChunkSectionsToRender {
         val renderer = minecraft.levelRenderer
         val viewArea = (renderer as LevelRendererAccessor).`metalcraft$viewArea`()
@@ -422,7 +427,11 @@ object ShaderPipeline {
                     for (y in minY..maxY) {
                         val section = viewArea.getRenderSectionAt(sectionLookup.set(x shl 4, y shl 4, z shl 4)) ?: continue
                         val mesh = section.getSectionMesh()
-                        if (mesh.isEmpty(ChunkSectionLayer.SOLID) && mesh.isEmpty(ChunkSectionLayer.CUTOUT)) continue
+                        if (mesh.isEmpty(ChunkSectionLayer.SOLID) && mesh.isEmpty(ChunkSectionLayer.CUTOUT) &&
+                            !(withTranslucent && !mesh.isEmpty(ChunkSectionLayer.TRANSLUCENT))
+                        ) {
+                            continue
+                        }
                         // Keep what falls inside the shadow map's square, seen from the light.
                         sectionCentre.set(
                             ((x shl 4) + 8 - cameraX).toFloat(), ((y shl 4) + 8 - cameraY).toFloat(), ((z shl 4) + 8 - cameraZ).toFloat(),
@@ -461,11 +470,14 @@ object ShaderPipeline {
         }
     }
 
-    /** Draws the opaque layers of [sections] with the program and bindings already set on [pass]. */
-    internal fun drawShadowTerrain(pass: MetalRenderPass, sections: ChunkSectionsToRender) {
+    /**
+     * Draws the opaque layers of [sections], and the translucent one too if asked, with the program and
+     * bindings already set on [pass].
+     */
+    internal fun drawShadowTerrain(pass: MetalRenderPass, sections: ChunkSectionsToRender, withTranslucent: Boolean = false) {
         val sharedIndices = RenderSystem.getSequentialBuffer(PrimitiveTopology.QUADS)
         val defaultIndexBuffer = if (sections.maxIndicesRequired() == 0) null else sharedIndices.getBuffer(sections.maxIndicesRequired())
-        for (layer in SHADOW_LAYERS) {
+        for (layer in if (withTranslucent) SHADOW_LAYERS_WITH_TRANSLUCENT else SHADOW_LAYERS) {
             val groups = sections.drawGroupsPerLayer()[layer] ?: continue
             for (draws in groups.values) {
                 pass.drawMultipleIndexed(draws, defaultIndexBuffer, sharedIndices.type(), chunkSectionUniform, sections.chunkSectionInfos())
@@ -751,7 +763,17 @@ object ShaderPipeline {
     private val DEPTH_FORMAT = MetalFormats.code(GpuFormat.D32_FLOAT)
     private val UP_Y = Vector3f(0f, 1f, 0f)
     private val UP_Z = Vector3f(0f, 0f, 1f)
+    private val HIDDEN_PIPELINES: Set<RenderPipeline> = java.util.Collections.newSetFromMap<RenderPipeline>(java.util.IdentityHashMap()).apply {
+        add(RenderPipelines.SKY)
+        add(RenderPipelines.END_SKY)
+        add(RenderPipelines.SUNRISE_SUNSET)
+        add(RenderPipelines.STARS)
+        add(RenderPipelines.CLOUDS)
+        add(RenderPipelines.FLAT_CLOUDS)
+        add(RenderPipelines.ENTITY_SHADOW)
+    }
     private val SHADOW_LAYERS = arrayOf(ChunkSectionLayer.SOLID, ChunkSectionLayer.CUTOUT)
+    private val SHADOW_LAYERS_WITH_TRANSLUCENT = arrayOf(ChunkSectionLayer.SOLID, ChunkSectionLayer.CUTOUT, ChunkSectionLayer.TRANSLUCENT)
 
     // Bindings of the geometry programs, as documented in pack_header.metal.
     private val TERRAIN_ENTRIES = arrayOf(
