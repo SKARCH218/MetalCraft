@@ -9,6 +9,7 @@
 #   scripts/run-tests.sh --scenes cave,nether # only some scenes
 #   scripts/run-tests.sh --save-baseline      # keep this run as the reference set for its backend
 #   scripts/run-tests.sh --stamp NAME         # reuse an output folder name, to group several backends
+#   scripts/run-tests.sh --sodium             # run with Sodium installed (output folder <backend>-sodium)
 #   scripts/run-tests.sh --fresh-worlds       # regenerate the cached test world (baselines must be re-saved)
 #
 # Output: run/test-output/<date-time>/<backend>/{<scene>.png, metrics.json, log.txt, game-output.log}
@@ -26,6 +27,7 @@ scenes=""
 save_baseline=false
 compare=true
 fresh_worlds=false
+sodium=false
 stamp="$(date +%Y%m%d-%H%M%S)"
 
 while [ $# -gt 0 ]; do
@@ -37,7 +39,8 @@ while [ $# -gt 0 ]; do
         --save-baseline) save_baseline=true ;;
         --no-compare) compare=false ;;
         --fresh-worlds) fresh_worlds=true ;;
-        -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --sodium) sodium=true ;;
+        -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
     shift
@@ -58,8 +61,12 @@ if JAVA_25="$(/usr/libexec/java_home -v 25 2>/dev/null)"; then
     export JAVA_HOME="$JAVA_25"
 fi
 
-out="$PWD/run/test-output/$stamp/$backend"
+variant="$backend"
+$sodium && variant="$backend-sodium"
+out="$PWD/run/test-output/$stamp/$variant"
+# Sodium draws terrain and clouds its own way, so runs with it have their own reference set.
 baseline="$PWD/run/test-baseline/opengl"
+$sodium && baseline="$PWD/run/test-baseline/opengl-sodium"
 # A reused --stamp must not leave screenshots of an earlier run behind.
 rm -rf "$out"
 mkdir -p "$out"
@@ -72,9 +79,10 @@ fi
 
 gradle_args=(runClientGameTest "-Pmetalcraft.backend=$backend" "-Pmetalcraft.test.outputDir=$out" "-Pmetalcraft.test.benchmark=$benchmark" "-Pmetalcraft.test.worldCache=$worlds")
 [ -n "$scenes" ] && gradle_args+=("-Pmetalcraft.test.scenes=$scenes")
+$sodium && gradle_args+=("-Pmetalcraft.sodium=true")
 
 
-echo "==> Running scenes on $backend (output: $out)"
+echo "==> Running scenes on $variant (output: $out)"
 # caffeinate keeps the display awake; a sleeping display stops the game window from rendering.
 caffeinate -dims ./gradlew "${gradle_args[@]}" > "$out/game-output.log" 2>&1
 status=$?
@@ -104,8 +112,8 @@ if $benchmark && [ -f "$out/benchmark.md" ]; then
     mkdir -p docs
     [ -f docs/benchmarks.md ] || printf '# Benchmarks\n\nAppended by `scripts/run-tests.sh --benchmark`: 1920x1200, render distance 12, vsync off, no FPS limit,\n10 s warm-up and 30 s measurement per scene. Newest run last.\n' > docs/benchmarks.md
     {
-        printf '\n## %s · %s\n\n' "$(date '+%Y-%m-%d %H:%M')" "$backend"
-        printf 'Device: %s. Commit: %s. Output: `run/test-output/%s/%s`.\n\n' "$device" "$commit" "$stamp" "$backend"
+        printf '\n## %s · %s\n\n' "$(date '+%Y-%m-%d %H:%M')" "$variant"
+        printf 'Device: %s. Commit: %s. Output: `run/test-output/%s/%s`.\n\n' "$device" "$commit" "$stamp" "$variant"
         cat "$out/benchmark.md"
     } >> docs/benchmarks.md
     echo "==> Benchmark table appended to docs/benchmarks.md"
@@ -117,10 +125,10 @@ if $save_baseline; then
         echo "==> Baseline NOT saved: this run generated the test world. Run again with --save-baseline." >&2
         exit 1
     fi
-    rm -rf "$PWD/run/test-baseline/$backend"
-    mkdir -p "$PWD/run/test-baseline/$backend"
-    cp "$out"/*.png "$out/metrics.json" "$PWD/run/test-baseline/$backend/"
-    echo "==> Saved as baseline: run/test-baseline/$backend"
+    rm -rf "$PWD/run/test-baseline/$variant"
+    mkdir -p "$PWD/run/test-baseline/$variant"
+    cp "$out"/*.png "$out/metrics.json" "$PWD/run/test-baseline/$variant/"
+    echo "==> Saved as baseline: run/test-baseline/$variant"
 fi
 
 if $compare && ! $save_baseline && [ -d "$baseline" ]; then

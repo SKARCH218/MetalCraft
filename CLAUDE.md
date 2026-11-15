@@ -18,7 +18,7 @@
 | JDK | Temurin 25 (JDK 26 사용 금지) |
 | Mod ID / 패키지 | `metalcraft` / `dev.skarch.metalcraft` |
 | 환경 | Client 전용, Split Sources 사용 |
-| 함께 쓸 모드 | Sodium 0.9.x (26.2), Create Fly 6.0.9 (26.2용, 비공식 Fabric 포크) |
+| 함께 쓸 모드 | Create Fly 6.0.9 (26.2용, 비공식 Fabric 포크). Sodium은 지원하지 않는다(3-1 참고) |
 | 플랫폼 | macOS, Apple Silicon(M1 이상)만. 개발 기기: MacBook Pro M1 Max 32GB |
 | 최소 macOS | 14. MetalFX 프레임 보간은 macOS 26 이상에서만 켠다 |
 
@@ -57,7 +57,7 @@ MetalCraft/
 - 26.2에는 Mojang의 Vulkan 백엔드가 들어 있다. **이것을 기준 구현으로 삼는다.** Metal 백엔드는 Vulkan 백엔드와 같은 자리에 같은 방식으로 끼운다.
 - 26.2의 실제 클래스와 메서드 이름은 추측하지 말고 `./gradlew genSources`로 디컴파일한 소스를 읽고 확인한다.
 - 그래픽 옵션의 Graphics API 선택지에 "Metal"을 추가한다. Metal 초기화에 실패하면 로그를 남기고 Mojang 기본 렌더러로 돌아간다. 게임이 크래시되면 안 된다.
-- Sodium 0.9는 렌더링을 Blaze3D 위로 옮겼다. 따라서 Metal 백엔드가 제대로 구현되면 Sodium은 별도 포팅 없이 동작해야 한다. 안 되는 부분만 따로 대응한다.
+- **Sodium은 지원하지 않는다.** Sodium 0.9.2는 청크를 Blaze3D가 아니라 자체 OpenGL/Vulkan 호출로 그리므로 Metal 백엔드 위에서 동작하지 않는다(M3에서 확인). Sodium이 설치돼 있으면 MetalCraft는 Metal을 끄고 게임 기본 렌더러로 실행한다. 대신 MetalCraft가 자체 Metal 렌더링과 쉐이더 엔진을 갖는다. Sodium의 기법(청크 묶음 그리기 등)은 아이디어만 참고하고 코드는 가져오지 않는다.
 
 ### 3-2. 네이티브 브리지
 - JNI는 쓰지 않는다. **Java FFM(Panama, `java.lang.foreign`)**으로 Swift 라이브러리를 호출한다.
@@ -108,7 +108,7 @@ MetalCraft/
 | M0.5 | 자동 테스트 하네스 | 6-1의 명령 하나로 마크 실행 → 테스트 장면 스크린샷 → 지표 기록 → 자동 종료까지 동작. 현재 기본 렌더러(OpenGL)로 기준 스크린샷 세트 생성 |
 | M1 | Metal 창 | 게임 창의 `CAMetalLayer`에 단색 클리어와 삼각형 하나 출력 |
 | M2 | 바닐라 Metal 백엔드 | 월드, 엔티티, GUI, 하늘, 안개, 파티클이 OpenGL과 같은 모습으로 렌더링. F3에 "Metal" 표시. 같은 위치 스크린샷 비교 |
-| M3 | Sodium 호환 | Sodium을 넣고 M2 조건 유지, FPS 측정 기록 |
+| M3 | Sodium 호환 | **중단.** Sodium 0.9.2는 Metal 위에서 동작할 수 없음을 확인. Sodium이 있으면 Metal을 끄도록 처리. 쉐이더는 자체 엔진(M4)으로, 지원 팩은 아래 목록만 |
 | M4 | 쉐이더 파이프라인 엔진 | 테스트용 팩(그림자맵 + 블룸 + 톤매핑)이 전체 패스 구조로 동작. 게임 안에서 팩 끄기/켜기 가능 |
 | M5 | MetalFX | 공간 → 시간 업스케일링 동작, 렌더 스케일 설정 반영. 모션 벡터 오류(잔상) 없음 |
 | M6 | Create | Create Fly에서 폴백 동작 → Flywheel Metal 백엔드 → 테스트 팩에서 인스턴싱 gbuffers까지 동작. 대형 장치 앞에서 FPS 측정 |
@@ -151,6 +151,7 @@ scripts/run-tests.sh --backend vulkan     # 렌더러만 바꿔 실행 (opengl |
 scripts/run-tests.sh --benchmark          # 벤치마크: 장면마다 10초 워밍업 + 30초 측정, docs/benchmarks.md에 표 추가
 scripts/run-tests.sh --scenes cave,nether # 일부 장면만
 scripts/run-tests.sh --save-baseline      # 이번 실행을 기준 세트(run/test-baseline/<backend>)로 저장
+scripts/run-tests.sh --sodium             # Sodium을 넣고 실행 (호환성 확인용, 결과 폴더는 <backend>-sodium)
 ```
 
 자동 테스트가 도는 동안 게임 창을 닫거나 Cmd+Q를 누르면 실행이 실패로 끝난다.

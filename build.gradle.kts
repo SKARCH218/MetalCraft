@@ -103,6 +103,10 @@ repositories {
     // Loom adds the essential maven repositories to download Minecraft and libraries from automatically.
     // See https://docs.gradle.org/current/userguide/declaring_repositories.html
     // for more information about repositories.
+    exclusiveContent {
+        forRepository { maven("https://api.modrinth.com/maven") { name = "Modrinth" } }
+        filter { includeGroup("maven.modrinth") }
+    }
 }
 
 dependencies {
@@ -112,6 +116,12 @@ dependencies {
     implementation("net.fabricmc:fabric-language-kotlin:${project.property("kotlin_loader_version")}")
 
     implementation("net.fabricmc.fabric-api:fabric-api:${project.property("fabric_version")}")
+
+    // Mods MetalCraft has to work with (CLAUDE.md section 1). They are only put on the run classpath, and only
+    // on request (-Pmetalcraft.sodium=true or scripts/run-tests.sh --sodium): MetalCraft does not compile against them.
+    if (providers.gradleProperty("metalcraft.sodium").orNull == "true") {
+        runtimeOnly("maven.modrinth:sodium:${project.property("sodium_version")}")
+    }
 }
 
 tasks.processResources {
