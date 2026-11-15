@@ -41,6 +41,41 @@ loom {
     }
 }
 
+// Automated test harness (CLAUDE.md 6-1). Creates the `gametest` source set and the `runClientGameTest` task.
+fabricApi {
+    configureTests {
+        createSourceSet = true
+        modId = "metalcraft-gametest"
+        enableGameTests = false
+        enableClientGameTests = true
+        eula = true
+        // Every run starts from an empty game directory so options and worlds never leak between runs.
+        clearRunDirectory = true
+    }
+}
+
+// Harness switches are Gradle properties (-Pname=value) forwarded as JVM system properties.
+val harnessProperties = listOf(
+    "metalcraft.backend",
+    "metalcraft.test.outputDir",
+    "metalcraft.test.benchmark",
+    "metalcraft.test.scenes",
+    "metalcraft.test.worldCache",
+)
+
+loom {
+    runs {
+        named("clientGameTest") {
+            vmArg("--enable-native-access=ALL-UNNAMED")
+            // The gametest API pins the game framebuffer to these values regardless of the real window size.
+            programArgs("--width", "1920", "--height", "1200")
+            harnessProperties.forEach { name ->
+                providers.gradleProperty(name).orNull?.let { vmArg("-D$name=$it") }
+            }
+        }
+    }
+}
+
 val nativeDir = layout.projectDirectory.dir("native")
 
 val buildNative by tasks.registering(Exec::class) {

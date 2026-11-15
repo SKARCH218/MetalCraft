@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.skarch.metalcraft.gametest.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "AnimationStateMixin",
+    "DebugScreenOverlayMixin",
+    "LevelRendererMixin",
+    "LightmapRenderStateExtractorMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

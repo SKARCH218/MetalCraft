@@ -100,11 +100,12 @@ MetalCraft/
 
 ## 4. 마일스톤
 
-한 번에 하나씩 진행한다. 각 단계의 완료 조건을 `runClient`로 확인하고, 사용자에게 결과를 알린 뒤 다음 단계로 넘어간다.
+한 번에 하나씩 진행한다. M0.5 이후로는 각 단계의 완료 조건을 **자동 테스트(6-1)로 직접 확인**하고, 결과 스크린샷과 수치를 사용자에게 알린 뒤 다음 단계로 넘어간다.
 
 | 단계 | 내용 | 완료 조건 |
 |---|---|---|
 | M0 | 빌드 기반 | Swift dylib가 Gradle로 빌드되어 jar에 들어가고, FFM으로 Swift 함수 하나를 호출해 로그 출력 |
+| M0.5 | 자동 테스트 하네스 | 6-1의 명령 하나로 마크 실행 → 테스트 장면 스크린샷 → 지표 기록 → 자동 종료까지 동작. 현재 기본 렌더러(OpenGL)로 기준 스크린샷 세트 생성 |
 | M1 | Metal 창 | 게임 창의 `CAMetalLayer`에 단색 클리어와 삼각형 하나 출력 |
 | M2 | 바닐라 Metal 백엔드 | 월드, 엔티티, GUI, 하늘, 안개, 파티클이 OpenGL과 같은 모습으로 렌더링. F3에 "Metal" 표시. 같은 위치 스크린샷 비교 |
 | M3 | Sodium 호환 | Sodium을 넣고 M2 조건 유지, FPS 측정 기록 |
@@ -142,14 +143,75 @@ MetalCraft/
 ```bash
 ./gradlew genSources        # 마인크래프트 디컴파일 소스 생성 (Blaze3D 구조 확인용)
 ./gradlew build             # 네이티브 + 모드 빌드
-./gradlew runClient         # 테스트 실행
+./gradlew runClient         # 직접 플레이용 실행
 cd native && swift build -c release   # 네이티브만 따로 빌드
+
+scripts/run-tests.sh                      # 자동 테스트: 전체 장면 촬영 + 빠른 지표 (OpenGL, 약 4분)
+scripts/run-tests.sh --backend vulkan     # 렌더러만 바꿔 실행 (opengl | vulkan | metal), OpenGL 기준과 자동 비교
+scripts/run-tests.sh --benchmark          # 벤치마크: 장면마다 10초 워밍업 + 30초 측정, docs/benchmarks.md에 표 추가
+scripts/run-tests.sh --scenes cave,nether # 일부 장면만
+scripts/run-tests.sh --save-baseline      # 이번 실행을 기준 세트(run/test-baseline/<backend>)로 저장
 ```
+
+자동 테스트가 도는 동안 게임 창을 닫거나 Cmd+Q를 누르면 실행이 실패로 끝난다.
+
+### 6-1. 자동 테스트 하네스
+
+Claude Code가 사람 없이 마크를 실행하고 결과를 검증하기 위한 장치. M0.5에서 만들고, 이후 모든 마일스톤의 검증에 쓴다.
+
+**구성**
+- Fabric API의 클라이언트 게임테스트 기능을 사용한다. 26.2에서의 정확한 모듈 이름과 Loom 실행 태스크는 Fabric 문서와 Fabric API 소스로 확인한다. 쓸 수 없으면 MetalCraft 안에 같은 역할의 테스트 모드를 직접 만든다(시스템 프로퍼티 `-Dmetalcraft.test=true`로 켬).
+- 렌더러 선택은 `-Dmetalcraft.backend=opengl|vulkan|metal`로 고정할 수 있게 한다. 같은 테스트를 백엔드만 바꿔 돌리기 위해서다.
+
+**재현성 고정**
+- 창 크기 1920×1200, 렌더 스케일 100%, 렌더 거리 12, vsync 끔, FPS 제한 없음
+- 고정 시드 월드(일반 월드 1개 + 슈퍼플랫 1개). 시간과 날씨는 장면마다 고정하고 진행을 멈춘다(`doDaylightCycle`, `doWeatherCycle` 끔)
+- 장면마다 좌표와 시점(yaw, pitch)을 고정하고, 청크 로딩이 끝날 때까지 기다린 뒤 촬영한다
+
+**테스트 장면** (필요하면 추가)
+1. 낮 평원 (기본 지형, 하늘, 구름)
+2. 물과 바다 (반투명, 수면)
+3. 밤 + 횃불 (조명, 어두운 영역)
+4. 동굴 (안개, 블록 조명)
+5. 네더 (다른 차원, 안개 색)
+6. 엔티티 다수 (몹 50마리 이상, 아이템 드롭, 파티클)
+7. GUI (인벤토리, 채팅, F3 화면)
+8. Create 장치 (M6부터: 톱니·축이 수백 개인 고정 구조물, 회전 중인 상태)
+
+**출력**
+```
+run/test-output/<날짜-시간>/<backend>/
+├─ <장면>.png
+├─ metrics.json      # 장면별 평균 FPS, 1% low, 평균·p99 프레임 시간
+└─ log.txt           # 경고, 에러, Metal 검증 레이어 메시지
+```
+
+**검증 방법**
+- **이미지 비교**: 같은 장면의 OpenGL 기준 이미지와 Metal 이미지를 픽셀 단위로 비교하는 스크립트를 만든다. 차이 비율과 차이 부분을 강조한 diff 이미지를 출력한다. 쉐이더 정밀도 차이 같은 미세한 오차는 허용 기준을 두고 넘긴다.
+- **눈으로 확인**: 차이가 기준을 넘거나 애매하면 Claude Code가 스크린샷과 diff 이미지를 직접 열어 보고 원인을 판단한다.
+- **성능 측정**: 벤치마크 모드는 장면마다 10초 워밍업 후 30초 측정한다. 결과는 `docs/benchmarks.md`에 백엔드별 표로 누적 기록한다.
+- 쉐이더팩 포팅(M7)에서는 원본 팩의 기준 이미지를 사용자가 따로 제공한다(맥에서 원본이 안 돌아가는 팩이 있기 때문). 기준 이미지가 없으면 사용자에게 요청한다.
+
+**하네스로 확인할 수 없는 것**
+움직일 때의 잔상, 깜빡임, 입력 지연, 조작감 같은 체감 요소는 자동 테스트로 판단하지 않는다. 마일스톤을 마칠 때 사용자가 직접 확인해야 할 항목을 짧은 체크리스트로 함께 알린다.
+
+**구현 메모 (M0.5에서 정해진 것)**
+- 테스트 코드는 `src/gametest/`(별도 모드 `metalcraft-gametest`, 배포 jar에 안 들어감)에 있고 Loom의 `runClientGameTest`로 실행된다. 진입점은 `scripts/run-tests.sh`.
+- 일반 월드는 첫 실행에서 만든 것을 `run/test-worlds/`에 보관해 재사용한다. 같은 시드라도 월드 생성 결과가 실행마다 조금 달라지기 때문이다. `--fresh-worlds`로 지우면 기준 세트도 다시 저장해야 한다.
+- 기준 세트는 `run/test-baseline/opengl/`(git 제외). 월드를 새로 만든 실행으로는 기준을 저장할 수 없다(한 번 더 실행).
+- 촬영 순간에 텍스처 애니메이션·구름·조명 깜빡임을 고정하고 파티클을 지운다. 비네트는 꺼 둔다. 그래서 같은 렌더러끼리는 픽셀 단위로 일치한다(차이 0.01% 미만).
+- `entities_fx`(아이템 드롭, 연기)와 `gui_f3`는 본질적으로 매번 달라서 픽셀 비교에서 빼고 눈으로만 확인한다.
+- 허용 기준: 채널 차이 8 초과인 픽셀이 0.5% 이하.
+- Metal 백엔드는 게임테스트 API가 하는 화면 출력 크기 보정(`GlCommandEncoderMixin`, `VulkanGpuSurfaceMixin` 참고)을 직접 처리해야 한다.
+
+**실행 조건**
+게임 창이 실제로 떠야 하므로 Mac이 로그인된 상태이고 화면이 켜져 있어야 한다. 실행에 실패하면 이 조건부터 확인한다.
+
+### 6-2. 디버깅
 
 - Metal 검증 레이어: `MTL_DEBUG_LAYER=1`, `MTL_SHADER_VALIDATION=1` 환경변수로 `runClient` 실행.
 - GPU 프레임 캡처: `MTL_CAPTURE_ENABLED=1`로 실행 후 Xcode에서 캡처.
-- 성능 측정은 같은 월드, 같은 좌표, 같은 시간대에서 OpenGL / Vulkan / Metal을 비교하고 결과를 `docs/benchmarks.md`에 기록한다.
-- 이 프로젝트는 macOS에서만 빌드하고 테스트할 수 있다. Metal 관련 코드를 수정한 뒤에는 반드시 빌드와 `runClient`로 확인한다.
+- 이 프로젝트는 macOS에서만 빌드하고 테스트할 수 있다. Metal 관련 코드를 수정한 뒤에는 반드시 빌드하고 자동 테스트를 돌려 확인한다.
 
 ## 7. 라이선스 주의
 

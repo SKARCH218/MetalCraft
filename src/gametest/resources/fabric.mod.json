@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "metalcraft-gametest",
+  "version": "1.0.0",
+  "name": "MetalCraft Test Harness",
+  "description": "Automated scene screenshots and frame-time metrics for MetalCraft. Never shipped.",
+  "environment": "client",
+  "entrypoints": {
+    "fabric-client-gametest": [
+      "dev.skarch.metalcraft.gametest.MetalCraftGameTest"
+    ]
+  },
+  "mixins": [
+    {
+      "config": "metalcraft-gametest.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "metalcraft": "*",
+    "fabric-client-gametest-api-v1": "*"
+  }
+}
