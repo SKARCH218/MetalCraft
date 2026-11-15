@@ -155,6 +155,7 @@ scripts/run-tests.sh --shaderpack test    # Metal + 쉐이더팩으로 실행 (�
 scripts/run-tests.sh --upscale temporal --render-scale 67   # Metal + MetalFX (spatial | temporal, 결과 폴더 metal-temporal67)
 scripts/run-tests.sh --sodium             # Sodium을 넣고 실행 (호환성 확인용, 결과 폴더는 <backend>-sodium)
 scripts/run-tests.sh --iris <팩.zip>      # 원본 팩을 Iris + Sodium + OpenGL로 실행 (비교 기준, 결과 폴더 iris-<팩>)
+scripts/run-tests.sh --create            # Create Fly를 넣고 실행 (create 장면 추가, 결과 폴더 <구성>-create). 다른 옵션과 함께 쓸 수 있다
 
 # 쉐이더팩 GLSL → MetalCraft 팩 변환 (포팅 보조 도구, M7)
 ./gradlew convertShaderPack -Ppack.source=shaderpacks/_original/<팩>/shaders -Ppack.output=shaderpacks/<이름> -Ppack.port=src/tools/resources/ports/<이름>.json
@@ -237,6 +238,7 @@ run/test-output/<날짜-시간>/<backend>/
 - 측정용으로 `-Pmetalcraft.test.width=<w> -Pmetalcraft.test.height=<h>`(환경변수 `ORG_GRADLE_PROJECT_...`)로 자동 테스트의 화면 크기를 바꿀 수 있다. 기준 세트는 1920×1200이다.
 - 자동 테스트의 팩 끄기/켜기는 K 키를 원하는 팩이 될 때까지 누른다(팩이 여러 개 설치돼 있어도 동작).
 - M7에서 아직 없는 것: 엔티티 그림자, 손(게임이 팩 뒤에 자체 셰이더로 그림), 날씨·선·번개·신호기 빔·글린트·움직이는 블록용 팩 프로그램(지금은 게임 셰이더로 보이기만 함), 엔티티별 uniform(entityId, entityColor 등)과 손에 든 아이템 uniform(로그에 목록이 남는다), 팩 옵션.
+- M6 상태(Create, 2026-11-16): Create Fly 6.0.9(`gradle.properties`의 `create_version`, `-Pmetalcraft.create=true`)는 Metal 위에서 크래시 없이 돈다. Flywheel은 `com.zurrtum.create.client.flywheel`에 내장돼 있고 OpenGL을 직접 쓰므로 Metal에서는 `flywheel:off`로 떨어져 블록 엔티티 렌더러로 그린다(폴백). create 장면(축·톱니 1,536개, 1920×1200): Metal 팩 없음 약 100 FPS, Metal + Complementary 약 81 FPS, Iris + Complementary 약 40 FPS(Iris도 팩이 켜지면 Flywheel이 꺼진다), OpenGL 팩 없음(Flywheel 인스턴싱) 약 184 FPS. 폴백은 CPU에서 막힌다. Flywheel용 Metal 백엔드는 아직 없다.
 - 아직 없는 것: 게임 내 그래픽 옵션의 "Metal" 선택지, GPU 타임스탬프 쿼리(F3의 GPU 사용률은 의미 없음), multi-draw·indirect draw(장치 기능으로 꺼 둠), 렌더 영역이 일부인 패스의 색·깊이 단독 클리어.
 - Java 예외 한 곳: `backend/MetalBackendBase.java`. Mojang이 null을 넘기는데 non-null로 선언된 `GpuBackend.handleWindowCreationErrors`는 Kotlin으로 안전하게 오버라이드할 수 없어서 Java로 받는다.
 - Metal 백엔드는 게임테스트 API가 하는 화면 출력 크기 보정(`GlCommandEncoderMixin`, `VulkanGpuSurfaceMixin` 참고)을 직접 처리해야 한다.

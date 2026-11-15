@@ -156,6 +156,10 @@ dependencies {
 
     // Mods MetalCraft has to work with (CLAUDE.md section 1). They are only put on the run classpath, and only
     // on request (-Pmetalcraft.sodium=true or scripts/run-tests.sh --sodium): MetalCraft does not compile against them.
+    // Create Fly: the mod MetalCraft is built to run well (CLAUDE.md section 3-7), -Pmetalcraft.create=true.
+    if (providers.gradleProperty("metalcraft.create").orNull == "true") {
+        runtimeOnly("maven.modrinth:create-fly:${project.property("create_version")}")
+    }
     val withIris = providers.gradleProperty("metalcraft.iris").orNull == "true"
     if (providers.gradleProperty("metalcraft.sodium").orNull == "true" || withIris) {
         runtimeOnly("maven.modrinth:sodium:${project.property("sodium_version")}")

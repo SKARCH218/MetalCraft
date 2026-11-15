@@ -12,6 +12,7 @@
 #   scripts/run-tests.sh --shaderpack test    # Metal with a shader pack (output and baseline folder metal-<pack>)
 #   scripts/run-tests.sh --upscale temporal --render-scale 67   # Metal with MetalFX (folder metal-temporal67)
 #   scripts/run-tests.sh --sodium             # run with Sodium installed (output folder <backend>-sodium)
+#   scripts/run-tests.sh --create             # with Create Fly installed (output folder <variant>-create)
 #   scripts/run-tests.sh --iris <pack.zip>    # the original pack on Iris + Sodium + OpenGL, as a reference
 #                                             # (pack from shaderpacks/_original/, output folder iris-<pack>)
 #   scripts/run-tests.sh --fresh-worlds       # regenerate the cached test world (baselines must be re-saved)
@@ -33,6 +34,7 @@ compare=true
 fresh_worlds=false
 sodium=false
 iris=""
+create=false
 shaderpack=""
 upscale=""
 render_scale=75
@@ -48,6 +50,7 @@ while [ $# -gt 0 ]; do
         --no-compare) compare=false ;;
         --fresh-worlds) fresh_worlds=true ;;
         --sodium) sodium=true ;;
+        --create) create=true ;;
         --iris) iris="${2:?--iris needs the name of a pack zip in shaderpacks/_original}"; backend=opengl; shift ;;
         --upscale) upscale="${2:?--upscale needs a value}"; backend=metal; shift ;;
         --render-scale) render_scale="${2:?--render-scale needs a value}"; shift ;;
@@ -98,6 +101,7 @@ $sodium && variant="$backend-sodium"
 [ -n "$shaderpack" ] && variant="$backend-$shaderpack"
 [ -n "$upscale" ] && variant="$variant-$upscale$render_scale"
 [ -n "$iris" ] && variant="iris-${iris%.zip}"
+$create && variant="$variant-create"
 out="$PWD/run/test-output/$stamp/$variant"
 # Sodium draws terrain and clouds its own way, so runs with it have their own reference set.
 baseline="$PWD/run/test-baseline/opengl"
@@ -121,6 +125,7 @@ fi
 gradle_args=(runClientGameTest "-Pmetalcraft.backend=$backend" "-Pmetalcraft.test.outputDir=$out" "-Pmetalcraft.test.benchmark=$benchmark" "-Pmetalcraft.test.worldCache=$worlds")
 [ -n "$scenes" ] && gradle_args+=("-Pmetalcraft.test.scenes=$scenes")
 $sodium && gradle_args+=("-Pmetalcraft.sodium=true")
+$create && gradle_args+=("-Pmetalcraft.create=true")
 [ -n "$iris" ] && gradle_args+=("-Pmetalcraft.iris=true" "-Pmetalcraft.test.irisPack=$iris")
 [ -n "$shaderpack" ] && gradle_args+=("-Pmetalcraft.shaderpack=$shaderpack")
 [ -n "$upscale" ] && gradle_args+=("-Pmetalcraft.upscale=$upscale" "-Pmetalcraft.renderScale=$render_scale")

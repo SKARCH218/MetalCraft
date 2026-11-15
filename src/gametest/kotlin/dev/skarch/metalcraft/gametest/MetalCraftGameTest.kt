@@ -13,6 +13,7 @@ import net.fabricmc.fabric.impl.client.gametest.world.TestWorldSaveImpl
 import net.minecraft.client.CloudStatus
 import net.minecraft.client.InactivityFpsLimit
 import dev.skarch.metalcraft.pipeline.ShaderPipeline
+import net.fabricmc.loader.api.FabricLoader
 import net.minecraft.client.KeyMapping
 import net.minecraft.client.Minecraft
 import net.minecraft.client.Options
@@ -345,6 +346,28 @@ private class Harness(private val context: ClientGameTestContext) {
             teleport(world, OVERWORLD, view)
             waitForWorldReady()
             removeWildlife(world, OVERWORLD)
+
+            // Create machinery (CLAUDE.md scene 8): two layers of shaft and cogwheel rows, each row turned
+            // by a creative motor. Built away from the other flat-world scenes; only with Create installed.
+            if (selected("create") && FabricLoader.getInstance().isModLoaded("create")) {
+                val machineView = Viewpoint(116.5, ground + 16.0, 92.5, 0f, 35f)
+                teleport(world, OVERWORLD, machineView)
+                waitForWorldReady()
+                for (layer in 0 until 2) {
+                    val y = ground + 2 + layer * 3
+                    for (row in 0 until 24) {
+                        val z = 100 + row
+                        val part = if (row % 2 == 0) "create:shaft" else "create:cogwheel"
+                        world.server.runCommand("fill 101 $y $z 132 $y $z $part[axis=x]")
+                        world.server.runCommand("setblock 100 $y $z create:creative_motor[facing=east]")
+                    }
+                }
+                world.connection.waitForClientboundPackets()
+                context.waitTicks(SETTLE_TICKS)
+                capture("create", OVERWORLD, pixelCompare = false)
+                teleport(world, OVERWORLD, view)
+                waitForWorldReady()
+            }
             // Mobs are summoned only now, a fixed number of ticks before the screenshot, so their age-driven
             // idle animations are in the same pose on every run.
             summonMobs(world.server, ground)
@@ -627,7 +650,7 @@ private class Harness(private val context: ClientGameTestContext) {
         const val NETHER = "minecraft:the_nether"
 
         val NORMAL_WORLD_SCENES = listOf("plains_day", "ocean", "underwater", "night_torches", "cave", "nether")
-        val FLAT_WORLD_SCENES = listOf("entities", "gui_inventory", "after_reload", "gui_chat", "entities_fx", "gui_f3")
+        val FLAT_WORLD_SCENES = listOf("create", "entities", "gui_inventory", "after_reload", "gui_chat", "entities_fx", "gui_f3")
         val ALL_SCENES = (NORMAL_WORLD_SCENES + FLAT_WORLD_SCENES).toSet()
 
         fun fmt(value: Double): String = String.format(Locale.ROOT, "%.2f", value)
