@@ -11,8 +11,11 @@ internal object NativeLibrary {
     private const val FILE_NAME = "libMetalCraftNative.dylib"
     private const val RESOURCE_PATH = "natives/metalcraft/macos-arm64/$FILE_NAME"
 
+    /** The opened library. First access extracts and loads it, and throws if that fails. */
+    val lookup: SymbolLookup by lazy { load() }
+
     /** Extracts the bundled dylib into a private temp directory and opens it for the lifetime of the JVM. */
-    fun load(): SymbolLookup {
+    private fun load(): SymbolLookup {
         val os = System.getProperty("os.name")
         val arch = System.getProperty("os.arch")
         if (!os.startsWith("Mac") || arch != "aarch64") {

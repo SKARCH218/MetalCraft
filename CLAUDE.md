@@ -151,7 +151,6 @@ scripts/run-tests.sh --backend vulkan     # 렌더러만 바꿔 실행 (opengl |
 scripts/run-tests.sh --benchmark          # 벤치마크: 장면마다 10초 워밍업 + 30초 측정, docs/benchmarks.md에 표 추가
 scripts/run-tests.sh --scenes cave,nether # 일부 장면만
 scripts/run-tests.sh --save-baseline      # 이번 실행을 기준 세트(run/test-baseline/<backend>)로 저장
-scripts/run-tests.sh --metal-probe        # M1 확인: 게임 창의 CAMetalLayer에 삼각형을 그리고 그 프레임을 검사 (약 30초)
 ```
 
 자동 테스트가 도는 동안 게임 창을 닫거나 Cmd+Q를 누르면 실행이 실패로 끝난다.
@@ -201,9 +200,15 @@ run/test-output/<날짜-시간>/<backend>/
 - 일반 월드는 첫 실행에서 만든 것을 `run/test-worlds/`에 보관해 재사용한다. 같은 시드라도 월드 생성 결과가 실행마다 조금 달라지기 때문이다. `--fresh-worlds`로 지우면 기준 세트도 다시 저장해야 한다.
 - 기준 세트는 `run/test-baseline/opengl/`(git 제외). 월드를 새로 만든 실행으로는 기준을 저장할 수 없다(한 번 더 실행).
 - 촬영 순간에 텍스처 애니메이션·구름·조명 깜빡임을 고정하고 파티클을 지운다. 비네트는 꺼 둔다. 그래서 같은 렌더러끼리는 픽셀 단위로 일치한다(차이 0.01% 미만).
+- `after_reload` 장면은 창 크기 변경과 리소스 재로딩(F3+T와 같은 동작) 뒤의 화면을 찍는다.
 - `entities_fx`(아이템 드롭, 연기)와 `gui_f3`는 본질적으로 매번 달라서 픽셀 비교에서 빼고 눈으로만 확인한다.
 - 허용 기준: 채널 차이 8 초과인 픽셀이 0.5% 이하.
-- M1 상태: `-Dmetalcraft.backend=metal`이면 `MetalBackend`가 백엔드 목록 맨 앞에 들어가 창에 삼각형을 그린 뒤(`MetalWindowProbe`) 일부러 실패를 알려 기본 렌더러로 넘어간다. `-Dmetalcraft.probe.seconds=10`으로 삼각형을 오래 띄워 볼 수 있다. M2에서 실제 `GpuDevice`로 바꾼다.
+- M2 상태: Metal 백엔드는 `backend/Metal*.kt`(Blaze3D 인터페이스 구현)와 `native/.../Renderer.swift`(Metal 객체와 커맨드 인코딩)로 나뉜다. 셰이더는 게임에 들어 있는 shaderc와 SPIRV-Cross로 GLSL → SPIR-V → MSL 변환한다(런타임, 파이프라인 로딩 시점).
+- 렌더러 선택: `config/metalcraft.properties`의 `renderer=metal|vanilla`(기본 metal). `-Dmetalcraft.backend=opengl|vulkan|metal`이 있으면 그것이 우선한다. Metal 시작에 실패하면 게임이 다음 백엔드로 넘어간다.
+- 이미지 방향은 Vulkan 백엔드와 같다(0번 행이 화면 아래). 그래서 정점 셰이더에서 y를 뒤집고 화면 출력 때 다시 뒤집는다.
+- vsync가 꺼져 있으면 drawable을 백그라운드 스레드가 받아 두고, 준비된 것이 없는 프레임은 그리기만 하고 화면에 내보내지 않는다(`DrawablePump`). 기다리면 FPS가 디스플레이 주사율에 묶인다.
+- `-Dmetalcraft.debug.timing=true`: 렌더 스레드가 백엔드 안에서 기다린 시간을 500프레임마다 로그로 남긴다.
+- 아직 없는 것: 게임 내 그래픽 옵션의 "Metal" 선택지, GPU 타임스탬프 쿼리(F3의 GPU 사용률은 의미 없음), multi-draw·indirect draw(장치 기능으로 꺼 둠), 렌더 영역이 일부인 패스의 색·깊이 단독 클리어.
 - Java 예외 한 곳: `backend/MetalBackendBase.java`. Mojang이 null을 넘기는데 non-null로 선언된 `GpuBackend.handleWindowCreationErrors`는 Kotlin으로 안전하게 오버라이드할 수 없어서 Java로 받는다.
 - Metal 백엔드는 게임테스트 API가 하는 화면 출력 크기 보정(`GlCommandEncoderMixin`, `VulkanGpuSurfaceMixin` 참고)을 직접 처리해야 한다.
 

@@ -61,8 +61,7 @@ val harnessProperties = listOf(
     "metalcraft.test.benchmark",
     "metalcraft.test.scenes",
     "metalcraft.test.worldCache",
-    "metalcraft.probe.capture",
-    "metalcraft.probe.seconds",
+    "metalcraft.debug.timing",
 )
 
 loom {

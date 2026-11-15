@@ -4,9 +4,7 @@ import dev.skarch.metalcraft.MetalCraft.LOGGER
 import java.lang.foreign.Arena
 import java.lang.foreign.FunctionDescriptor
 import java.lang.foreign.Linker
-import java.lang.foreign.MemorySegment
 import java.lang.foreign.ValueLayout.ADDRESS
-import java.lang.foreign.ValueLayout.JAVA_FLOAT
 import java.lang.foreign.ValueLayout.JAVA_INT
 import java.lang.invoke.MethodHandle
 
@@ -20,7 +18,7 @@ class NativeException(val code: Int, message: String) : RuntimeException("Native
  */
 private object Symbols {
     private val linker = Linker.nativeLinker()
-    private val lookup = NativeLibrary.load()
+    private val lookup = NativeLibrary.lookup
 
     @JvmField
     val abiVersion: MethodHandle = bind("mcn_abi_version", FunctionDescriptor.of(JAVA_INT))
@@ -30,25 +28,6 @@ private object Symbols {
 
     @JvmField
     val lastError: MethodHandle = bind("mcn_last_error", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT))
-
-    @JvmField
-    val surfaceCreate: MethodHandle = bind("mcn_surface_create", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS))
-
-    @JvmField
-    val surfaceDestroy: MethodHandle = bind("mcn_surface_destroy", FunctionDescriptor.of(JAVA_INT, ADDRESS))
-
-    @JvmField
-    val surfaceSyncSize: MethodHandle = bind("mcn_surface_sync_size", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS))
-
-    @JvmField
-    val surfaceSetProbeShader: MethodHandle =
-        bind("mcn_surface_set_probe_shader", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS))
-
-    @JvmField
-    val surfaceDrawProbeFrame: MethodHandle = bind(
-        "mcn_surface_draw_probe_frame",
-        FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT, ADDRESS),
-    )
 
     private fun bind(name: String, descriptor: FunctionDescriptor): MethodHandle {
         val symbol = lookup.find(name).orElseThrow { UnsatisfiedLinkError("Native symbol $name not found") }
@@ -98,50 +77,6 @@ object NativeBridge {
             val length = Symbols.lastError.invokeExact(buffer, MESSAGE_CAPACITY) as Int
             return if (length > 0) buffer.getString(0) else "unknown error"
         }
-    }
-
-    /** Attaches a Metal layer to the given `NSWindow*` and returns the surface handle. */
-    internal fun surfaceCreate(nsWindow: Long): MemorySegment {
-        checkAvailable()
-        Arena.ofConfined().use { arena ->
-            val out = arena.allocate(ADDRESS)
-            check(Symbols.surfaceCreate.invokeExact(MemorySegment.ofAddress(nsWindow), out) as Int)
-            return out.get(ADDRESS, 0)
-        }
-    }
-
-    internal fun surfaceDestroy(handle: MemorySegment) {
-        check(Symbols.surfaceDestroy.invokeExact(handle) as Int)
-    }
-
-    /** Fits the drawable to the window and stores its size in pixels into `size[0]` (width) and `size[1]` (height). */
-    internal fun surfaceSyncSize(handle: MemorySegment, size: IntArray) {
-        Arena.ofConfined().use { arena ->
-            val out = arena.allocate(JAVA_INT, 2)
-            check(Symbols.surfaceSyncSize.invokeExact(handle, out, out.asSlice(JAVA_INT.byteSize())) as Int)
-            size[0] = out.getAtIndex(JAVA_INT, 0)
-            size[1] = out.getAtIndex(JAVA_INT, 1)
-        }
-    }
-
-    internal fun surfaceSetProbeShader(handle: MemorySegment, source: String) {
-        Arena.ofConfined().use { arena ->
-            check(Symbols.surfaceSetProbeShader.invokeExact(handle, arena.allocateFrom(source)) as Int)
-        }
-    }
-
-    internal fun surfaceDrawProbeFrame(handle: MemorySegment, red: Float, green: Float, blue: Float, capturePath: String?) {
-        if (capturePath == null) {
-            check(Symbols.surfaceDrawProbeFrame.invokeExact(handle, red, green, blue, MemorySegment.NULL) as Int)
-            return
-        }
-        Arena.ofConfined().use { arena ->
-            check(Symbols.surfaceDrawProbeFrame.invokeExact(handle, red, green, blue, arena.allocateFrom(capturePath)) as Int)
-        }
-    }
-
-    private fun check(code: Int) {
-        if (code != 0) throw NativeException(code, lastError())
     }
 
     private fun checkAvailable() {

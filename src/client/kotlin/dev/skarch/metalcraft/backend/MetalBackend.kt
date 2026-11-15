@@ -13,10 +13,9 @@ import java.util.Locale
 /**
  * The Metal entry in the game's list of graphics backends, next to Mojang's OpenGL and Vulkan ones.
  *
- * Milestone M1 state: the window is created without an OpenGL context and the Metal layer is proven to work
- * on it ([MetalWindowProbe]). There is no `GpuDevice` yet, so [createDevice] then reports a failure and the
- * game carries on with the next backend in the list. That fallback is also what must happen whenever Metal
- * cannot start.
+ * The game creates its window without an OpenGL context and asks [createDevice] for the renderer. Any
+ * failure to start is reported as a [BackendCreationException], on which the game carries on with the next
+ * backend in its list instead of crashing.
  */
 class MetalBackend : MetalBackendBase() {
     override fun getName(): String = NAME
@@ -41,15 +40,11 @@ class MetalBackend : MetalBackendBase() {
             throw BackendCreationException("The MetalCraft native library could not be loaded", BackendCreationException.Reason.OTHER)
         }
         try {
-            MetalWindowProbe.run(window)
+            return GpuDevice(MetalDevice(defaultShaderSource), criticalShaderLoader)
         } catch (t: Throwable) {
-            LOGGER.error("Metal window probe failed", t)
-            throw BackendCreationException("Metal could not draw to the game window: ${t.message}", BackendCreationException.Reason.OTHER)
+            LOGGER.error("Could not start the Metal renderer", t)
+            throw BackendCreationException("Metal could not be started: ${t.message}", BackendCreationException.Reason.OTHER)
         }
-        throw BackendCreationException(
-            "The Metal renderer is not implemented yet (the window probe succeeded)",
-            BackendCreationException.Reason.OTHER,
-        )
     }
 
     companion object {

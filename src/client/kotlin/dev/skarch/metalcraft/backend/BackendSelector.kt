@@ -2,11 +2,15 @@ package dev.skarch.metalcraft.backend
 
 import com.mojang.blaze3d.systems.GpuBackend
 import dev.skarch.metalcraft.MetalCraft.LOGGER
+import dev.skarch.metalcraft.config.MetalCraftConfig
 import net.minecraft.client.PreferredGraphicsApi
 
 /**
- * Pins the renderer from `-Dmetalcraft.backend=opengl|vulkan|metal` so the same test run can be repeated on
- * every backend. Without the property the game's own launch argument and video setting stay in charge.
+ * Decides which renderer the game starts on.
+ *
+ * `-Dmetalcraft.backend=opengl|vulkan|metal` pins it, so the same test run can be repeated on every backend.
+ * Without the property, Metal is used when `config/metalcraft.properties` says so (the default), and the
+ * game's own launch argument and video setting decide what comes after it.
  */
 object BackendSelector {
     const val PROPERTY = "metalcraft.backend"
@@ -18,7 +22,7 @@ object BackendSelector {
         return when (requested) {
             "opengl" -> PreferredGraphicsApi.OPENGL
             "vulkan" -> PreferredGraphicsApi.VULKAN
-            // Metal is not one of the game's own choices: [backendsToTry] puts it in front of the default list.
+            // Metal is not one of the game's own choices: [backendsToTry] puts it in front of the game's list.
             "metal" -> fromLaunchArgument
             else -> {
                 LOGGER.warn("Ignoring unknown -D{}={} (expected opengl, vulkan or metal)", PROPERTY, requested)
@@ -27,11 +31,16 @@ object BackendSelector {
         }
     }
 
-    /** Called once from the `Minecraft` constructor with the backends the game is about to try, in order. */
+    /**
+     * Called once from the `Minecraft` constructor with the backends the game is about to try, in order.
+     * Metal goes first; if it cannot start, the game moves on to the rest of the list.
+     */
     @JvmStatic
     fun backendsToTry(original: Array<GpuBackend>): Array<GpuBackend> {
-        if (System.getProperty(PROPERTY)?.trim()?.lowercase() != "metal") return original
-        LOGGER.info("-D{}=metal: trying the Metal backend first", PROPERTY)
+        val requested = System.getProperty(PROPERTY)?.trim()?.lowercase()
+        val useMetal = if (requested != null) requested == "metal" else MetalCraftConfig.useMetalRenderer
+        if (!useMetal) return original
+        LOGGER.info("Starting on the Metal renderer")
         return arrayOf<GpuBackend>(MetalBackend(), *original)
     }
 }

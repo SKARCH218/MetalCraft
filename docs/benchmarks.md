@@ -32,3 +32,33 @@ Device: Apple M1 Max. Commit: 558a9ab + local changes. Output: `run/test-output/
 | entities | 191.37 | 54.31 | 5.23 | 13.82 |
 | gui_inventory | 191.25 | 59.51 | 5.23 | 11.12 |
 | entities_fx | 191.05 | 55.46 | 5.23 | 14.88 |
+
+## 2026-11-15 14:32 · opengl
+
+Device: Apple M1 Max. Commit: 94f2ada + local changes. Output: `run/test-output/m2-benchmark/opengl`.
+
+| Scene | Avg FPS | 1% low FPS | Avg frame (ms) | p99 frame (ms) |
+|---|---:|---:|---:|---:|
+| plains_day | 174.18 | 71.97 | 5.74 | 12.32 |
+| ocean | 138.67 | 63.45 | 7.21 | 13.61 |
+| night_torches | 168.80 | 65.03 | 5.92 | 13.45 |
+| cave | 231.61 | 70.08 | 4.32 | 12.52 |
+| nether | 134.29 | 57.22 | 7.45 | 14.18 |
+| entities | 165.74 | 65.90 | 6.03 | 13.05 |
+| gui_inventory | 145.63 | 70.46 | 6.87 | 13.32 |
+| entities_fx | 148.79 | 65.21 | 6.72 | 13.59 |
+
+## 2026-11-15 14:40 · metal
+
+Device: Apple M1 Max. Commit: 94f2ada + local changes. Output: `run/test-output/m2-benchmark/metal`.
+
+| Scene | Avg FPS | 1% low FPS | Avg frame (ms) | p99 frame (ms) |
+|---|---:|---:|---:|---:|
+| plains_day | 963.81 | 416.28 | 1.04 | 2.06 |
+| ocean | 755.04 | 370.33 | 1.32 | 2.41 |
+| night_torches | 963.99 | 386.01 | 1.04 | 2.16 |
+| cave | 1218.23 | 354.81 | 0.82 | 1.97 |
+| nether | 747.33 | 341.30 | 1.34 | 2.52 |
+| entities | 689.81 | 299.87 | 1.45 | 3.07 |
+| gui_inventory | 680.20 | 300.23 | 1.47 | 3.07 |
+| entities_fx | 670.45 | 291.65 | 1.49 | 3.13 |
