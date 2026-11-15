@@ -158,6 +158,7 @@ private class Converter(private val source: Path, private val output: Path, priv
         manifest.add("buffers", buffers())
         manifest.add("textures", textures())
         blockIds()?.let { manifest.addProperty("blockIds", it) }
+        port.get("separateAo")?.let { manifest.add("separateAo", it) }
         manifest.add("dimensions", manifestDimensions)
         manifest.addProperty("uniformBlockSize", uniforms.size)
         manifest.add("uniforms", JsonArray().also { array ->

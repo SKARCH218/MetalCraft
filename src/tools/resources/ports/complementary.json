@@ -26,5 +26,6 @@
   },
   "alphaTest": {
     "gbuffers_water": 0.0001
-  }
+  },
+  "separateAo": true
 }

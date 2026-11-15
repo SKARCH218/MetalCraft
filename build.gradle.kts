@@ -63,6 +63,7 @@ val harnessProperties = listOf(
     "metalcraft.test.benchmark",
     "metalcraft.test.scenes",
     "metalcraft.test.width",
+    "metalcraft.test.irisPack",
     "metalcraft.test.height",
     "metalcraft.test.worldCache",
     "metalcraft.debug.timing",
@@ -155,8 +156,14 @@ dependencies {
 
     // Mods MetalCraft has to work with (CLAUDE.md section 1). They are only put on the run classpath, and only
     // on request (-Pmetalcraft.sodium=true or scripts/run-tests.sh --sodium): MetalCraft does not compile against them.
-    if (providers.gradleProperty("metalcraft.sodium").orNull == "true") {
+    val withIris = providers.gradleProperty("metalcraft.iris").orNull == "true"
+    if (providers.gradleProperty("metalcraft.sodium").orNull == "true" || withIris) {
         runtimeOnly("maven.modrinth:sodium:${project.property("sodium_version")}")
+    }
+    // Iris (with Sodium, which it needs) only ever runs next to MetalCraft to give reference pictures and frame
+    // rates of the original shader packs (scripts/run-tests.sh --iris). MetalCraft turns its renderer off then.
+    if (withIris) {
+        runtimeOnly("maven.modrinth:iris:${project.property("iris_version")}")
     }
 }
 

@@ -6,6 +6,9 @@
   "description": "Automated scene screenshots and frame-time metrics for MetalCraft. Never shipped.",
   "environment": "client",
   "entrypoints": {
+    "preLaunch": [
+      "dev.skarch.metalcraft.gametest.IrisReference"
+    ],
     "fabric-client-gametest": [
       "dev.skarch.metalcraft.gametest.MetalCraftGameTest"
     ]

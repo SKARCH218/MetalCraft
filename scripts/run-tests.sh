@@ -12,6 +12,8 @@
 #   scripts/run-tests.sh --shaderpack test    # Metal with a shader pack (output and baseline folder metal-<pack>)
 #   scripts/run-tests.sh --upscale temporal --render-scale 67   # Metal with MetalFX (folder metal-temporal67)
 #   scripts/run-tests.sh --sodium             # run with Sodium installed (output folder <backend>-sodium)
+#   scripts/run-tests.sh --iris <pack.zip>    # the original pack on Iris + Sodium + OpenGL, as a reference
+#                                             # (pack from shaderpacks/_original/, output folder iris-<pack>)
 #   scripts/run-tests.sh --fresh-worlds       # regenerate the cached test world (baselines must be re-saved)
 #
 # Output: run/test-output/<date-time>/<backend>/{<scene>.png, metrics.json, log.txt, game-output.log}
@@ -30,6 +32,7 @@ save_baseline=false
 compare=true
 fresh_worlds=false
 sodium=false
+iris=""
 shaderpack=""
 upscale=""
 render_scale=75
@@ -45,6 +48,7 @@ while [ $# -gt 0 ]; do
         --no-compare) compare=false ;;
         --fresh-worlds) fresh_worlds=true ;;
         --sodium) sodium=true ;;
+        --iris) iris="${2:?--iris needs the name of a pack zip in shaderpacks/_original}"; backend=opengl; shift ;;
         --upscale) upscale="${2:?--upscale needs a value}"; backend=metal; shift ;;
         --render-scale) render_scale="${2:?--render-scale needs a value}"; shift ;;
         --shaderpack) shaderpack="${2:?--shaderpack needs a value}"; backend=metal; shift ;;
@@ -93,6 +97,7 @@ variant="$backend"
 $sodium && variant="$backend-sodium"
 [ -n "$shaderpack" ] && variant="$backend-$shaderpack"
 [ -n "$upscale" ] && variant="$variant-$upscale$render_scale"
+[ -n "$iris" ] && variant="iris-${iris%.zip}"
 out="$PWD/run/test-output/$stamp/$variant"
 # Sodium draws terrain and clouds its own way, so runs with it have their own reference set.
 baseline="$PWD/run/test-baseline/opengl"
@@ -101,6 +106,8 @@ $sodium && baseline="$PWD/run/test-baseline/opengl-sodium"
 [ -n "$shaderpack" ] && baseline="$PWD/run/test-baseline/$variant"
 # An upscaled picture is close to the full-size one, but not within the pixel tolerance.
 [ -n "$upscale" ] && baseline="$PWD/run/test-baseline/$variant"
+# A reference run of the original pack: its animations cannot be held, so it is looked at, not compared.
+[ -n "$iris" ] && compare=false
 # A reused --stamp must not leave screenshots of an earlier run behind.
 rm -rf "$out"
 mkdir -p "$out"
@@ -114,6 +121,7 @@ fi
 gradle_args=(runClientGameTest "-Pmetalcraft.backend=$backend" "-Pmetalcraft.test.outputDir=$out" "-Pmetalcraft.test.benchmark=$benchmark" "-Pmetalcraft.test.worldCache=$worlds")
 [ -n "$scenes" ] && gradle_args+=("-Pmetalcraft.test.scenes=$scenes")
 $sodium && gradle_args+=("-Pmetalcraft.sodium=true")
+[ -n "$iris" ] && gradle_args+=("-Pmetalcraft.iris=true" "-Pmetalcraft.test.irisPack=$iris")
 [ -n "$shaderpack" ] && gradle_args+=("-Pmetalcraft.shaderpack=$shaderpack")
 [ -n "$upscale" ] && gradle_args+=("-Pmetalcraft.upscale=$upscale" "-Pmetalcraft.renderScale=$render_scale")
 

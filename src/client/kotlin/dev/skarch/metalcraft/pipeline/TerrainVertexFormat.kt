@@ -23,7 +23,7 @@ interface TerrainExtrasTarget {
  *
  * ```
  *  0  Position       3 floats      (game)
- * 12  Color          4 bytes       (game)
+ * 12  Color          4 bytes       (game; adjusted for shader packs, see colorMode)
  * 16  UV0            2 floats      (game)
  * 24  UV2            2 shorts      (game)
  * 28  McNormal       4 signed bytes, normalised: face normal, w unused
@@ -39,8 +39,28 @@ object TerrainVertexFormat {
     @JvmField
     val enabled: Boolean = BackendSelector.metalRequested()
 
+    /** The game's vertex colours as they are: tint x face shade x ambient occlusion. */
+    const val COLOR_VANILLA = 0
+
+    /** Face shade taken out (a pack lights faces itself): tint x ambient occlusion. */
+    const val COLOR_UNSHADED = 1
+
+    /** Face shade taken out and ambient occlusion moved to alpha (`separateAo` of the Iris pack format). */
+    const val COLOR_SEPARATE_AO = 2
+
+    /** How terrain colours are stored, one of the COLOR_ constants. Sections are rebuilt when it changes. */
+    @JvmField
+    @Volatile
+    var colorMode = COLOR_VANILLA
+
+    /** The Nether shades the top and bottom of blocks alike. */
+    @JvmField
+    @Volatile
+    var netherShading = false
+
     const val SIZE = 48
     private const val POSITION = 0L
+    private const val COLOR = 12L
     private const val UV = 16L
     private const val NORMAL = 28L
     private const val TANGENT = 32L
@@ -168,6 +188,9 @@ object TerrainVertexFormat {
             tz = 0f
         }
 
+        val mode = colorMode
+        if (mode != COLOR_VANILLA) unshade(p, nx, ny, nz, mode == COLOR_SEPARATE_AO)
+
         val normal = pack(nx, ny, nz, 0f)
         val tangent = pack(tx, ty, tz, handedness)
         val midU = (u0 + u1 + u2 + u3) * 0.25f
@@ -183,6 +206,43 @@ object TerrainVertexFormat {
             vertex += SIZE
         }
     }
+
+    /**
+     * Undoes what the game multiplied into the colours of a quad. The shade follows from the face direction
+     * (quads that face no axis, such as crossed plants, are not shaded by the game). Ambient occlusion is the
+     * one thing that differs between the corners, so it is taken relative to the brightest corner.
+     */
+    private fun unshade(p: Long, nx: Float, ny: Float, nz: Float, separateAo: Boolean) {
+        val shade = when {
+            ny > 0.99f -> if (netherShading) 0.9f else 1f
+            ny < -0.99f -> if (netherShading) 0.9f else 0.5f
+            Math.abs(nz) > 0.99f -> 0.8f
+            Math.abs(nx) > 0.99f -> 0.6f
+            else -> 1f
+        }
+        var brightest = 0
+        if (separateAo) {
+            var vertex = p
+            for (i in 0 until 4) {
+                brightest = maxOf(brightest, brightness(MemoryUtil.memGetInt(vertex + COLOR)))
+                vertex += SIZE
+            }
+        }
+        var vertex = p
+        for (i in 0 until 4) {
+            val color = MemoryUtil.memGetInt(vertex + COLOR)
+            val occlusion = if (separateAo && brightest > 0) brightness(color).toFloat() / brightest else 1f
+            val scale = 1f / (shade * maxOf(occlusion, 0.01f))
+            val r = minOf(255, Math.round((color and 0xFF) * scale))
+            val g = minOf(255, Math.round((color shr 8 and 0xFF) * scale))
+            val b = minOf(255, Math.round((color shr 16 and 0xFF) * scale))
+            val a = if (separateAo) Math.round(occlusion * 255f) else color ushr 24
+            MemoryUtil.memPutInt(vertex + COLOR, r or (g shl 8) or (b shl 16) or (a shl 24))
+            vertex += SIZE
+        }
+    }
+
+    private fun brightness(color: Int): Int = maxOf(color and 0xFF, color shr 8 and 0xFF, color shr 16 and 0xFF)
 
     /** Four signed normalised bytes, x in the lowest byte (Apple Silicon is little-endian). */
     private fun pack(x: Float, y: Float, z: Float, w: Float): Int =

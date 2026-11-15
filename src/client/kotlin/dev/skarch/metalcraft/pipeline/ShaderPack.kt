@@ -224,6 +224,8 @@ internal class ConvertedSpec(json: JsonObject, dimension: String) {
             program.get("alphaTest")?.asFloat ?: -1f,
         )
     }
+    /** Whether the pack wants ambient occlusion in the alpha of terrain colours instead of multiplied in. */
+    val separateAo: Boolean = json.get("separateAo")?.asBoolean ?: false
     val uniformBlockSize: Int = json.get("uniformBlockSize").asInt
     val uniforms: List<Uniform> = json.getAsJsonArray("uniforms").map {
         val uniform = it.asJsonObject

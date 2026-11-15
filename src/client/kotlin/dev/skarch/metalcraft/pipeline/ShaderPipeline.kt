@@ -291,8 +291,13 @@ object ShaderPipeline {
         val pack = packs.firstOrNull { it.id == selected } ?: return null
         return try {
             if (pack.isConverted) {
-                converted = ConvertedPack(device, pack, pack.converted(dimension), dimension)
-                applyBlockIds(pack.blockIdsFile?.let(pack::read))
+                val spec = pack.converted(dimension)
+                converted = ConvertedPack(device, pack, spec, dimension)
+                applyBlockIds(
+                    pack.blockIdsFile?.let(pack::read),
+                    if (spec.separateAo) TerrainVertexFormat.COLOR_SEPARATE_AO else TerrainVertexFormat.COLOR_UNSHADED,
+                    dimension == "world-1",
+                )
                 LOGGER.info("Shader pack loaded: {}", pack.displayName)
                 return null
             }
@@ -323,9 +328,18 @@ object ShaderPipeline {
         current.destroy()
     }
 
-    /** Block IDs live in the terrain vertices: when the table changes, every section is built again. */
-    private fun applyBlockIds(table: String?) {
-        if (BlockIds.load(table)) Minecraft.getInstance().levelExtractor.allChanged()
+    /**
+     * Block IDs and the pack's form of vertex colours live in the terrain vertices: when either changes,
+     * every section is built again.
+     */
+    private fun applyBlockIds(table: String?, colorMode: Int = TerrainVertexFormat.COLOR_VANILLA, netherShading: Boolean = false) {
+        var changed = BlockIds.load(table)
+        if (TerrainVertexFormat.colorMode != colorMode || TerrainVertexFormat.netherShading != netherShading) {
+            TerrainVertexFormat.colorMode = colorMode
+            TerrainVertexFormat.netherShading = netherShading
+            changed = true
+        }
+        if (changed) Minecraft.getInstance().levelExtractor.allChanged()
     }
 
     /** A pack that cannot be compiled or drawn is switched off until another one is selected. */
