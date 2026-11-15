@@ -103,6 +103,10 @@ internal class ConvertedPack(
     private val linearRepeat: MetalSampler
     private val shadowCompare: MetalSampler
 
+    // The game binds the block atlas with a linear sampler and picks texels in its own terrain shader. A pack
+    // samples the atlas directly and expects what OpenGL packs get: the nearest texel, blended between mip levels.
+    private val atlas: MetalSampler
+
     private var depth0Texture: MetalTexture? = null
     private var depth0View: MetalTextureView? = null
     private var depth1Texture: MetalTexture? = null
@@ -176,6 +180,9 @@ internal class ConvertedPack(
         nearest = sampler(AddressMode.CLAMP_TO_EDGE, FilterMode.NEAREST)
         linearRepeat = sampler(AddressMode.REPEAT, FilterMode.LINEAR)
         shadowCompare = device.createShadowSampler()
+        atlas = device.createSampler(
+            AddressMode.CLAMP_TO_EDGE, AddressMode.CLAMP_TO_EDGE, FilterMode.NEAREST, FilterMode.NEAREST, 1, OptionalDouble.empty(),
+        ) as MetalSampler
         val resolution = spec.shadowResolution
         shadowDepth = device.createTexture(
             "MetalCraft shadowtex", GpuTexture.USAGE_RENDER_ATTACHMENT or GpuTexture.USAGE_TEXTURE_BINDING, GpuFormat.D32_FLOAT, resolution, resolution, 1, 1,
@@ -419,6 +426,7 @@ internal class ConvertedPack(
         val program = currentProgram ?: return
         pass.setUniform(PACK_UNIFORMS, frameSlice ?: return)
         pass.setUniform(DRAW_UNIFORMS, currentDraw ?: return)
+        if (program.spec.kind == "terrain") pass.overrideSampler("Sampler0", atlas)
         bindTextures(pass, program)
     }
 
@@ -841,6 +849,7 @@ internal class ConvertedPack(
         nearest.close()
         linearRepeat.close()
         shadowCompare.close()
+        atlas.close()
         for (buffer in drawBuffers) buffer.close()
         drawBuffers.clear()
         // Programs may be bound in the frame being recorded; Metal keeps what a command buffer uses alive.

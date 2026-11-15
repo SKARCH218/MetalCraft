@@ -140,6 +140,13 @@ internal class MetalRenderPass(private val device: MetalDevice, private val enco
         }
     }
 
+    /** Replaces the sampler of a texture the game has already bound; nothing happens if it has not. */
+    fun overrideSampler(name: String, sampler: MetalSampler) {
+        if (!textureViews.containsKey(name)) return
+        samplers[name] = sampler
+        bindingsDirty = true
+    }
+
     override fun setUniform(name: String, value: GpuBuffer) {
         uniforms[name] = value.slice()
         bindingsDirty = true
