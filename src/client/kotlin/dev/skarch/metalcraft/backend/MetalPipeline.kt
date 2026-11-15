@@ -136,12 +136,7 @@ internal class MetalPipeline(private val device: MetalDevice, val info: RenderPi
     private fun redirectedShaders(slot: Int): Long {
         if (redirectedPair != 0L && redirectedSlot == slot) return redirectedPair
         val source = shaders ?: return 0L
-        val output = COLOR_OUTPUT.find(source.fragmentMsl) ?: return 0L
-        val name = output.groupValues[1]
-        // The game's colours are ready for the display; the pack's image holds linear light.
-        val fragment = source.fragmentMsl
-            .replace("[[color(0)]]", "[[color(${slot + 1})]]")
-            .replace("return out;", "out.$name.xyz = pow(max(out.$name.xyz, float3(0.0)), float3(2.2)); return out;")
+        val fragment = redirectColor(source.fragmentMsl, slot) ?: return 0L
         if (redirectedPair != 0L) device.encoder.releaseLater(redirectedPair)
         redirectedPair = compile(source.vertexMsl, fragment)
         redirectedSlot = slot
@@ -235,6 +230,18 @@ internal class MetalPipeline(private val device: MetalDevice, val info: RenderPi
     }
 
     companion object {
+        /**
+         * Fragment MSL (as SPIRV-Cross writes it) with its colour going to a shader pack's extra target
+         * [slot] instead of the first attachment, or null if it has no such output. The colours of the
+         * game's shaders are ready for the display; a pack's image holds linear light.
+         */
+        fun redirectColor(fragmentMsl: String, slot: Int): String? {
+            val name = (COLOR_OUTPUT.find(fragmentMsl) ?: return null).groupValues[1]
+            return fragmentMsl
+                .replace("[[color(0)]]", "[[color(${slot + 1})]]")
+                .replace("return out;", "out.$name.xyz = pow(max(out.$name.xyz, float3(0.0)), float3(2.2)); return out;")
+        }
+
         private const val VARIANT_COUNT = 57
         private const val COMPARE_ALWAYS = 7
 

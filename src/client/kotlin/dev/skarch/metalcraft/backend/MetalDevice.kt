@@ -43,7 +43,7 @@ internal class MetalDevice(private val defaultShaderSource: ShaderSource) : GpuD
     val context: Long
 
     private val info: DeviceInfo
-    private val shaderCompiler = MetalShaderCompiler()
+    internal val shaderCompiler = MetalShaderCompiler()
     private val pipelines = IdentityHashMap<RenderPipeline, MetalPipeline>()
     private val spirvCache = HashMap<ShaderKey, ByteBuffer?>()
 

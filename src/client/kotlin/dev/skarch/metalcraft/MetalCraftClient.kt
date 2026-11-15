@@ -1,5 +1,7 @@
 package dev.skarch.metalcraft
 
+import net.fabricmc.loader.api.FabricLoader
+
 import dev.skarch.metalcraft.MetalCraft.LOGGER
 import dev.skarch.metalcraft.backend.MetalDevice
 import dev.skarch.metalcraft.native.NativeBridge
@@ -24,6 +26,14 @@ class MetalCraftClient : ClientModInitializer {
             LOGGER.error("Native bridge self-check failed", t)
         }
         registerShaderPackKey()
+        // Create draws its moving parts through Flywheel; give it a backend that works on Metal.
+        if (FabricLoader.getInstance().isModLoaded("create")) {
+            try {
+                dev.skarch.metalcraft.flywheel.MetalFlywheel.register()
+            } catch (t: Throwable) {
+                LOGGER.error("Could not register the Flywheel backend for Metal; Create will use its plain renderers", t)
+            }
+        }
     }
 
     /** One key steps through the installed shader packs and "Off". */

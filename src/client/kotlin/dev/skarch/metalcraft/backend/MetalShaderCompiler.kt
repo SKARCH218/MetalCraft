@@ -114,6 +114,61 @@ internal class MetalShaderCompiler : AutoCloseable {
         }
     }
 
+    /**
+     * Translates a shader pair that is not one of the game's pipelines (Flywheel's instancing programs).
+     * Uniform and storage blocks go to the buffer index [bufferIndex] gives for their name, textures are
+     * numbered in the order they are found, and vertex inputs take their place in [attributes].
+     */
+    fun translateStandalone(
+        vertexSpirv: ByteBuffer, fragmentSpirv: ByteBuffer, bufferIndex: (String) -> Int, attributes: List<String>,
+    ): TranslatedShaders {
+        val vertex = Stage(vertexSpirv)
+        try {
+            val fragment = Stage(fragmentSpirv)
+            try {
+                val entries = ArrayList<BindingEntry>()
+                for (stage in arrayOf(vertex, fragment)) {
+                    for (buffer in stage.uniformBuffers + stage.storageBuffers) {
+                        if (entries.none { it.kind == BindingEntry.UNIFORM_BUFFER && it.name == buffer.name }) {
+                            entries.add(BindingEntry(BindingEntry.UNIFORM_BUFFER, buffer.name, null, bufferIndex(buffer.name)))
+                        }
+                    }
+                    for (image in stage.images) {
+                        if (entries.none { it.kind == BindingEntry.TEXTURE && it.name == image.name }) {
+                            entries.add(BindingEntry(BindingEntry.TEXTURE, image.name, null, textureCount(entries)))
+                        }
+                    }
+                }
+                if (textureCount(entries) > MAX_TEXTURES) throw ShaderException("Too many textures for Metal: ${textureCount(entries)}")
+                for (input in vertex.inputs) {
+                    val location = attributes.indexOf(input.name)
+                    if (location < 0) throw ShaderException("Shader expects input variables which are not being provided: [${input.name}]")
+                    Spvc.spvc_compiler_set_decoration(vertex.compiler, input.id, DECORATION_LOCATION, location)
+                }
+                val outputNames = vertex.outputs.map { it.name }
+                vertex.outputs.forEachIndexed { index, output -> Spvc.spvc_compiler_set_decoration(vertex.compiler, output.id, DECORATION_LOCATION, index) }
+                for (input in fragment.inputs) {
+                    val location = outputNames.indexOf(input.name)
+                    if (location < 0) throw ShaderException("Shader expects input variables which are not being provided: [${input.name}]")
+                    Spvc.spvc_compiler_set_decoration(fragment.compiler, input.id, DECORATION_LOCATION, location)
+                }
+                for (stage in arrayOf(vertex, fragment)) {
+                    for (resource in stage.uniformBuffers + stage.storageBuffers) {
+                        bind(stage, resource, entries.first { it.kind == BindingEntry.UNIFORM_BUFFER && it.name == resource.name })
+                    }
+                    for (resource in stage.images) {
+                        bind(stage, resource, entries.first { it.kind == BindingEntry.TEXTURE && it.name == resource.name })
+                    }
+                }
+                return TranslatedShaders(entries.toTypedArray(), vertex.toMsl(flipY = true), fragment.toMsl(flipY = false))
+            } finally {
+                fragment.close()
+            }
+        } finally {
+            vertex.close()
+        }
+    }
+
     override fun close() {
         Shaderc.shaderc_compile_options_release(options)
         Shaderc.shaderc_compiler_release(compiler)
@@ -191,6 +246,7 @@ internal class MetalShaderCompiler : AutoCloseable {
         val context: Long
         val compiler: Long
         val uniformBuffers: List<Resource>
+        val storageBuffers: List<Resource>
         val images: List<Resource>
         val inputs: List<Resource>
         val outputs: List<Resource>
@@ -211,6 +267,7 @@ internal class MetalShaderCompiler : AutoCloseable {
                     expect(Spvc.spvc_compiler_create_shader_resources(compiler, pointer), "Couldn't create resource list")
                     val resources = pointer.get(0)
                     uniformBuffers = list(stack, resources, Spvc.SPVC_RESOURCE_TYPE_UNIFORM_BUFFER, false)
+                    storageBuffers = list(stack, resources, Spvc.SPVC_RESOURCE_TYPE_STORAGE_BUFFER, false)
                     images = list(stack, resources, Spvc.SPVC_RESOURCE_TYPE_SAMPLED_IMAGE, true)
                     inputs = list(stack, resources, Spvc.SPVC_RESOURCE_TYPE_STAGE_INPUT, false)
                     outputs = list(stack, resources, Spvc.SPVC_RESOURCE_TYPE_STAGE_OUTPUT, false)
