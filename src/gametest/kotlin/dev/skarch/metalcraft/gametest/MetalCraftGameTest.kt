@@ -354,7 +354,8 @@ private class Harness(private val context: ClientGameTestContext) {
                 val machineView = Viewpoint(116.5, ground + 16.0, 92.5, 0f, 35f)
                 teleport(world, OVERWORLD, machineView)
                 waitForWorldReady()
-                for (layer in 0 until 2) {
+                // Two layers (1536 parts) unless -Dmetalcraft.test.createLayers asks for more (for measurements).
+                for (layer in 0 until Integer.getInteger("metalcraft.test.createLayers", 2)) {
                     val y = ground + 2 + layer * 3
                     for (row in 0 until 24) {
                         val z = 100 + row

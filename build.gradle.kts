@@ -65,6 +65,7 @@ val harnessProperties = listOf(
     "metalcraft.test.width",
     "metalcraft.test.irisPack",
     "metalcraft.test.renderDistance",
+    "metalcraft.test.createLayers",
     "metalcraft.test.fov",
     "metalcraft.test.height",
     "metalcraft.test.worldCache",
