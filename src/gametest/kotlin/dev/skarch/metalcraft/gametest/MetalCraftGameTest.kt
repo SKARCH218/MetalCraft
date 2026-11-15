@@ -57,6 +57,7 @@ class MetalCraftGameTest : FabricClientGameTest {
 private class Harness(private val context: ClientGameTestContext) {
     private val requestedBackend: String? = System.getProperty("metalcraft.backend")?.trim()?.lowercase()
     private val benchmark = System.getProperty("metalcraft.test.benchmark").toBoolean()
+    private val shaderPack: String? = System.getProperty("metalcraft.shaderpack")?.takeIf { it.isNotBlank() && it != "off" }
     private val sceneFilter: Set<String> = System.getProperty("metalcraft.test.scenes").orEmpty()
         .split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
     private val warmupSeconds = if (benchmark) 10.0 else 2.0
@@ -95,6 +96,14 @@ private class Harness(private val context: ClientGameTestContext) {
         // The run script appends this table to docs/benchmarks.md.
         if (benchmark) Files.writeString(outputDir.resolve("benchmark.md"), benchmarkTable.toString())
         LOGGER.info("Test run finished: {} scenes written to {}", sceneResults.size(), outputDir)
+    }
+
+    /** Presses MetalCraft's "next shader pack" key and waits until its on-screen message has faded. */
+    private fun pressShaderPackKey() {
+        context.input.pressKey(
+            Function<Options, KeyMapping> { options -> options.keyMappings.first { it.name == "key.metalcraft.cycle_shaderpack" } },
+        )
+        context.waitTicks(100)
     }
 
     private fun selected(scene: String) = sceneFilter.isEmpty() || scene in sceneFilter
@@ -321,6 +330,14 @@ private class Harness(private val context: ClientGameTestContext) {
                 waitForWorldReady()
                 context.waitTicks(SETTLE_TICKS)
                 capture("after_reload", OVERWORLD, benchmarkable = false)
+                // With a shader pack: switch it off and on again with its key. "pack_off" must look like the
+                // game without a pack, "pack_on_again" like "after_reload".
+                if (shaderPack != null) {
+                    pressShaderPackKey()
+                    capture("pack_off", OVERWORLD, benchmarkable = false)
+                    pressShaderPackKey()
+                    capture("pack_on_again", OVERWORLD, benchmarkable = false)
+                }
                 teleport(world, OVERWORLD, view)
                 waitForWorldReady()
             }

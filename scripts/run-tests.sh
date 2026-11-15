@@ -9,6 +9,7 @@
 #   scripts/run-tests.sh --scenes cave,nether # only some scenes
 #   scripts/run-tests.sh --save-baseline      # keep this run as the reference set for its backend
 #   scripts/run-tests.sh --stamp NAME         # reuse an output folder name, to group several backends
+#   scripts/run-tests.sh --shaderpack test    # Metal with a shader pack (output and baseline folder metal-<pack>)
 #   scripts/run-tests.sh --sodium             # run with Sodium installed (output folder <backend>-sodium)
 #   scripts/run-tests.sh --fresh-worlds       # regenerate the cached test world (baselines must be re-saved)
 #
@@ -28,6 +29,7 @@ save_baseline=false
 compare=true
 fresh_worlds=false
 sodium=false
+shaderpack=""
 stamp="$(date +%Y%m%d-%H%M%S)"
 
 while [ $# -gt 0 ]; do
@@ -40,7 +42,8 @@ while [ $# -gt 0 ]; do
         --no-compare) compare=false ;;
         --fresh-worlds) fresh_worlds=true ;;
         --sodium) sodium=true ;;
-        -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --shaderpack) shaderpack="${2:?--shaderpack needs a value}"; backend=metal; shift ;;
+        -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
     shift
@@ -63,10 +66,13 @@ fi
 
 variant="$backend"
 $sodium && variant="$backend-sodium"
+[ -n "$shaderpack" ] && variant="$backend-$shaderpack"
 out="$PWD/run/test-output/$stamp/$variant"
 # Sodium draws terrain and clouds its own way, so runs with it have their own reference set.
 baseline="$PWD/run/test-baseline/opengl"
 $sodium && baseline="$PWD/run/test-baseline/opengl-sodium"
+# A shader pack changes the picture on purpose; it is compared with its own earlier result.
+[ -n "$shaderpack" ] && baseline="$PWD/run/test-baseline/$variant"
 # A reused --stamp must not leave screenshots of an earlier run behind.
 rm -rf "$out"
 mkdir -p "$out"
@@ -80,6 +86,7 @@ fi
 gradle_args=(runClientGameTest "-Pmetalcraft.backend=$backend" "-Pmetalcraft.test.outputDir=$out" "-Pmetalcraft.test.benchmark=$benchmark" "-Pmetalcraft.test.worldCache=$worlds")
 [ -n "$scenes" ] && gradle_args+=("-Pmetalcraft.test.scenes=$scenes")
 $sodium && gradle_args+=("-Pmetalcraft.sodium=true")
+[ -n "$shaderpack" ] && gradle_args+=("-Pmetalcraft.shaderpack=$shaderpack")
 
 
 echo "==> Running scenes on $variant (output: $out)"

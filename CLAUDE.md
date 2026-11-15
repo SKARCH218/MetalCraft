@@ -151,6 +151,7 @@ scripts/run-tests.sh --backend vulkan     # 렌더러만 바꿔 실행 (opengl |
 scripts/run-tests.sh --benchmark          # 벤치마크: 장면마다 10초 워밍업 + 30초 측정, docs/benchmarks.md에 표 추가
 scripts/run-tests.sh --scenes cave,nether # 일부 장면만
 scripts/run-tests.sh --save-baseline      # 이번 실행을 기준 세트(run/test-baseline/<backend>)로 저장
+scripts/run-tests.sh --shaderpack test    # Metal + 쉐이더팩으로 실행 (결과와 기준 폴더는 metal-<팩 이름>)
 scripts/run-tests.sh --sodium             # Sodium을 넣고 실행 (호환성 확인용, 결과 폴더는 <backend>-sodium)
 ```
 
@@ -201,6 +202,7 @@ run/test-output/<날짜-시간>/<backend>/
 - 일반 월드는 첫 실행에서 만든 것을 `run/test-worlds/`에 보관해 재사용한다. 같은 시드라도 월드 생성 결과가 실행마다 조금 달라지기 때문이다. `--fresh-worlds`로 지우면 기준 세트도 다시 저장해야 한다.
 - 기준 세트는 `run/test-baseline/opengl/`(git 제외). 월드를 새로 만든 실행으로는 기준을 저장할 수 없다(한 번 더 실행).
 - 촬영 순간에 텍스처 애니메이션·구름·조명 깜빡임을 고정하고 파티클을 지운다. 비네트는 꺼 둔다. 그래서 같은 렌더러끼리는 픽셀 단위로 일치한다(차이 0.01% 미만).
+- 쉐이더팩을 켠 실행에는 `pack_off`, `pack_on_again` 장면이 추가된다(키로 팩을 껐다 켬). `pack_off`는 팩 없는 `after_reload`와, `pack_on_again`은 같은 실행의 `after_reload`와 같아야 한다.
 - `after_reload` 장면은 창 크기 변경과 리소스 재로딩(F3+T와 같은 동작) 뒤의 화면을 찍는다.
 - `entities_fx`(아이템 드롭, 연기)와 `gui_f3`는 본질적으로 매번 달라서 픽셀 비교에서 빼고 눈으로만 확인한다.
 - 허용 기준: 채널 차이 8 초과인 픽셀이 0.5% 이하.
@@ -209,6 +211,10 @@ run/test-output/<날짜-시간>/<backend>/
 - 이미지 방향은 Vulkan 백엔드와 같다(0번 행이 화면 아래). 그래서 정점 셰이더에서 y를 뒤집고 화면 출력 때 다시 뒤집는다.
 - vsync가 꺼져 있으면 drawable을 백그라운드 스레드가 받아 두고, 준비된 것이 없는 프레임은 그리기만 하고 화면에 내보내지 않는다(`DrawablePump`). 기다리면 FPS가 디스플레이 주사율에 묶인다.
 - `-Dmetalcraft.debug.timing=true`: 렌더 스레드가 백엔드 안에서 기다린 시간을 500프레임마다 로그로 남긴다.
+- M4 상태(쉐이더 엔진, `pipeline/ShaderPipeline.kt`): 팩 폴더는 `<게임 폴더>/shaderpacks/<이름>/`, 모드에 내장된 테스트 팩은 `src/client/resources/assets/metalcraft/shaderpacks/test/`. 팩 형식은 `pipeline/ShaderPack.kt` 주석, 바인딩 규칙과 공통 함수는 `assets/metalcraft/shaders/pack_header.metal`에 있다.
+- 팩 선택: 게임 안에서 K 키(조작 설정에서 변경 가능)로 순환, `config/metalcraft.properties`의 `shaderpack=`에 저장. `-Dmetalcraft.shaderpack=<이름>`이 있으면 그것이 우선한다. 컴파일에 실패한 팩은 로그를 남기고 꺼진다.
+- 프레임 흐름: `GameRendererMixin`이 월드 렌더링 앞뒤로 엔진을 부른다. 앞에서 그림자 패스를 돌리고, 월드를 그리는 동안 지형 파이프라인을 팩의 `gbuffers_terrain`으로 바꾸며 메인 이미지에 팩의 추가 버퍼를 함께 붙인다. 뒤에서 deferred → composite → final 전체화면 패스를 돌린다. 손과 GUI는 그 뒤에 게임이 그린다.
+- M4에서 아직 없는 것: 엔티티 등 지형 이외의 팩 프로그램과 그림자, 카메라 시야 밖 물체의 그림자, "향상된 투명도" 설정과의 동시 사용(켜져 있으면 팩을 건너뜀), gbuffers 인스턴싱 버전(M6에서 Flywheel과 함께), deferred를 불투명 지오메트리 직후에 돌리는 것(지금은 월드 전체가 끝난 뒤).
 - 아직 없는 것: 게임 내 그래픽 옵션의 "Metal" 선택지, GPU 타임스탬프 쿼리(F3의 GPU 사용률은 의미 없음), multi-draw·indirect draw(장치 기능으로 꺼 둠), 렌더 영역이 일부인 패스의 색·깊이 단독 클리어.
 - Java 예외 한 곳: `backend/MetalBackendBase.java`. Mojang이 null을 넘기는데 non-null로 선언된 `GpuBackend.handleWindowCreationErrors`는 Kotlin으로 안전하게 오버라이드할 수 없어서 Java로 받는다.
 - Metal 백엔드는 게임테스트 API가 하는 화면 출력 크기 보정(`GlCommandEncoderMixin`, `VulkanGpuSurfaceMixin` 참고)을 직접 처리해야 한다.

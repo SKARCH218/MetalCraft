@@ -10,6 +10,7 @@ import com.mojang.blaze3d.systems.RenderPassDescriptor
 import com.mojang.blaze3d.systems.TransientMemory
 import com.mojang.blaze3d.textures.GpuTexture
 import dev.skarch.metalcraft.native.Mcn
+import dev.skarch.metalcraft.pipeline.ShaderPipeline
 import it.unimi.dsi.fastutil.longs.LongArrayList
 import org.joml.Vector4fc
 import org.lwjgl.system.MemoryUtil
@@ -151,9 +152,20 @@ internal class MetalCommandEncoder(private val device: MetalDevice) : CommandEnc
             check(colors.size == 1 && firstColor != null) { "A partial clear needs exactly one colour attachment" }
         }
 
+        // While a shader pack collects its G-buffer, passes that draw into the game's main image also get
+        // the pack's extra targets, so pack programs and game pipelines can share a pass.
+        var colorCount = colors.size
+        var extraTargets: IntArray? = null
+        val gbuffer = ShaderPipeline.gbuffer
+        if (gbuffer != null && colors.size == 1 && !clearByDrawing && firstColor != null && firstColor.texture() === gbuffer.mainColor) {
+            for (i in gbuffer.handles.indices) colorHandles.setAtIndex(JAVA_LONG, 1L + i, gbuffer.handles[i])
+            colorCount += gbuffer.handles.size
+            extraTargets = gbuffer.formats
+        }
+
         Mcn.check(
             Mcn.passBegin.invokeExact(
-                context, colors.size, colorHandles, if (clearByDrawing) 0 else clearMask, clearColors,
+                context, colorCount, colorHandles, if (clearByDrawing) 0 else clearMask, clearColors,
                 depthView?.handle ?: 0L, if (clearDepth && !clearByDrawing) 1 else 0, depthValue, MemorySegment.NULL,
             ) as Int,
         )
@@ -175,7 +187,7 @@ internal class MetalCommandEncoder(private val device: MetalDevice) : CommandEnc
                 throw UnsupportedOperationException("Partial clear of only colour or only depth is not supported by the Metal backend yet")
             }
         }
-        renderPass.begin(area.x(), area.y(), area.width(), area.height(), depthFormat)
+        renderPass.begin(area.x(), area.y(), area.width(), area.height(), depthFormat, extraTargets)
         return renderPass
     }
 

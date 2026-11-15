@@ -23,6 +23,7 @@ import com.mojang.blaze3d.textures.GpuTexture
 import com.mojang.blaze3d.textures.GpuTextureView
 import dev.skarch.metalcraft.MetalCraft.LOGGER
 import dev.skarch.metalcraft.native.Mcn
+import dev.skarch.metalcraft.pipeline.ShaderPipeline
 import net.minecraft.client.renderer.ShaderDefines
 import net.minecraft.resources.Identifier
 import org.lwjgl.glfw.GLFWNativeCocoa
@@ -84,6 +85,7 @@ internal class MetalDevice(private val defaultShaderSource: ShaderSource) : GpuD
             DeviceType.INTEGRATED,
         )
         encoder = MetalCommandEncoder(this)
+        current = this
     }
 
     override fun getDeviceInfo(): DeviceInfo = info
@@ -235,14 +237,21 @@ internal class MetalDevice(private val defaultShaderSource: ShaderSource) : GpuD
     override fun getTimestampNow(): Long = System.nanoTime()
 
     override fun close() {
-        encoder.destroy()
+        ShaderPipeline.deviceClosing()
+        current = null
+        // Pipelines queue their native objects for release; destroying the encoder then releases them.
         clearPipelineCache()
+        encoder.destroy()
         shaderCompiler.close()
         Mcn.check(Mcn.deviceDestroy.invokeExact(context) as Int)
     }
 
-    private companion object {
+    companion object {
+        /** The device the game is rendering with, or null when it runs on another backend. */
+        @JvmField
+        var current: MetalDevice? = null
+
         /** Metal aligns shader structs to at most 16 bytes, so uniform data may start at any multiple of 16. */
-        const val UNIFORM_OFFSET_ALIGNMENT = 16
+        private const val UNIFORM_OFFSET_ALIGNMENT = 16
     }
 }

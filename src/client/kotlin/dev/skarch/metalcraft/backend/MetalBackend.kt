@@ -43,6 +43,7 @@ class MetalBackend : MetalBackendBase() {
             return GpuDevice(MetalDevice(defaultShaderSource), criticalShaderLoader)
         } catch (t: Throwable) {
             LOGGER.error("Could not start the Metal renderer", t)
+            MetalDevice.current = null
             throw BackendCreationException("Metal could not be started: ${t.message}", BackendCreationException.Reason.OTHER)
         }
     }

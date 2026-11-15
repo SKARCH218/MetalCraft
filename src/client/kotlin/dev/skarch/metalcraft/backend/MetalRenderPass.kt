@@ -10,6 +10,7 @@ import com.mojang.blaze3d.systems.RenderPassBackend
 import com.mojang.blaze3d.textures.GpuSampler
 import com.mojang.blaze3d.textures.GpuTextureView
 import dev.skarch.metalcraft.native.Mcn
+import dev.skarch.metalcraft.pipeline.ShaderPipeline
 import org.lwjgl.PointerBuffer
 import org.lwjgl.system.MemoryUtil
 import java.lang.foreign.Arena
@@ -29,7 +30,8 @@ internal class MetalRenderPass(private val device: MetalDevice, private val enco
     private val uniforms = HashMap<String, GpuBufferSlice>()
     private val textureViews = HashMap<String, MetalTextureView>()
     private val samplers = HashMap<String, MetalSampler>()
-    private var pipeline: MetalPipeline? = null
+    private var pipeline: DrawProgram? = null
+    private var extraTargets: IntArray? = null
     private var bindingsDirty = false
     private var debugGroups = 0
 
@@ -45,7 +47,8 @@ internal class MetalRenderPass(private val device: MetalDevice, private val enco
     private val texelBufferOut: MemorySegment = Arena.global().allocate(JAVA_LONG)
     private val uniformUploader = RenderPass.UniformUploader { name, buffer -> setUniform(name, buffer) }
 
-    fun begin(x: Int, y: Int, width: Int, height: Int, depthFormat: Int) {
+    fun begin(x: Int, y: Int, width: Int, height: Int, depthFormat: Int, extraTargets: IntArray?) {
+        this.extraTargets = extraTargets
         areaX = x
         areaY = y
         areaWidth = width
@@ -74,12 +77,28 @@ internal class MetalRenderPass(private val device: MetalDevice, private val enco
     }
 
     override fun setPipeline(pipeline: RenderPipeline) {
-        val compiled = device.getOrCompilePipeline(pipeline)
-        check(compiled.isValid) { "Pipeline is not valid (may contain invalid shaders?)" }
-        this.pipeline = compiled
+        // An active shader pack replaces some of the game's pipelines with its own programs.
+        val replacement = ShaderPipeline.substitute(pipeline, extraTargets != null)
+        if (replacement != null) {
+            try {
+                setProgram(replacement)
+                ShaderPipeline.bindFrameResources(this)
+                return
+            } catch (e: Exception) {
+                // The game is in the middle of drawing the world: carry on with its own pipeline.
+                ShaderPipeline.programFailed(e)
+            }
+        }
+        setProgram(device.getOrCompilePipeline(pipeline))
+    }
+
+    /** Selects the shaders for the following draws. Shader pack passes call this directly. */
+    fun setProgram(program: DrawProgram) {
+        check(program.isUsable()) { "Pipeline is not valid (may contain invalid shaders?)" }
+        this.pipeline = program
         bindingsDirty = true
         Mcn.passSetPipeline.invokeExact(
-            context, compiled.variant(depthFormat), compiled.cull, compiled.wireframe, compiled.depthBias, compiled.depthBiasSlope,
+            context, program.variant(depthFormat, extraTargets), program.cull, program.wireframe, program.depthBias, program.depthBiasSlope,
         ) as Int
     }
 
@@ -140,7 +159,7 @@ internal class MetalRenderPass(private val device: MetalDevice, private val enco
 
     override fun draw(vertexCount: Int, instanceCount: Int, firstVertex: Int, firstInstance: Int) {
         val pipeline = pipeline
-        if (pipeline == null || !pipeline.isValid) return
+        if (pipeline == null || !pipeline.isUsable()) return
         pushBindings(pipeline)
         if (pipeline.primitive == MetalFormats.PRIMITIVE_UNSUPPORTED_FAN) {
             drawFan(vertexCount, instanceCount, firstVertex, firstInstance, 0L)
@@ -215,14 +234,14 @@ internal class MetalRenderPass(private val device: MetalDevice, private val enco
         (pool as MetalQueryPool).write(index)
     }
 
-    private fun readyPipeline(): MetalPipeline {
+    private fun readyPipeline(): DrawProgram {
         val pipeline = pipeline
-        check(pipeline != null && pipeline.isValid) { "Pipeline is missing or not valid" }
+        check(pipeline != null && pipeline.isUsable()) { "Pipeline is missing or not valid" }
         pushBindings(pipeline)
         return pipeline
     }
 
-    private fun pushBindings(pipeline: MetalPipeline) {
+    private fun pushBindings(pipeline: DrawProgram) {
         if (!bindingsDirty) return
         val entries = pipeline.entries
         for (entry in entries) {

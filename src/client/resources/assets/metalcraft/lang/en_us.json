@@ -1,0 +1,5 @@
+{
+  "key.metalcraft.cycle_shaderpack": "Next Shader Pack",
+  "metalcraft.shaderpack.selected": "Shader pack: %s",
+  "metalcraft.shaderpack.needs_metal": "Shader packs need the Metal renderer"
+}

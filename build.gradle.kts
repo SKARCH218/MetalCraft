@@ -62,6 +62,7 @@ val harnessProperties = listOf(
     "metalcraft.test.scenes",
     "metalcraft.test.worldCache",
     "metalcraft.debug.timing",
+    "metalcraft.shaderpack",
 )
 
 loom {

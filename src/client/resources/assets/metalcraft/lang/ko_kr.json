@@ -1,0 +1,5 @@
+{
+  "key.metalcraft.cycle_shaderpack": "다음 쉐이더팩",
+  "metalcraft.shaderpack.selected": "쉐이더팩: %s",
+  "metalcraft.shaderpack.needs_metal": "쉐이더팩은 Metal 렌더러에서만 동작합니다"
+}

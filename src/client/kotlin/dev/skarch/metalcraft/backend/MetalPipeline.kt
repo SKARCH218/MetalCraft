@@ -16,19 +16,23 @@ import java.lang.foreign.ValueLayout.JAVA_LONG
  * with, so native variants are created on first use per depth format.
  */
 internal class MetalPipeline(private val device: MetalDevice, val info: RenderPipeline, private val shaders: TranslatedShaders?) :
-    CompiledRenderPipeline {
+    CompiledRenderPipeline, DrawProgram {
     // The vertex and fragment functions compiled by Metal, shared by all variants. 0 if that failed.
     private var shaderPair = 0L
-    val entries: Array<BindingEntry> = shaders?.entries ?: emptyArray()
-    val primitive: Int = MetalFormats.primitive(info.primitiveTopology)
-    val cull: Int = if (info.isCull) 1 else 0
-    val wireframe: Int = if (info.polygonMode == PolygonMode.WIREFRAME) 1 else 0
-    val depthBias: Float
-    val depthBiasSlope: Float
+    override val entries: Array<BindingEntry> = shaders?.entries ?: emptyArray()
+    override val primitive: Int = MetalFormats.primitive(info.primitiveTopology)
+    override val cull: Int = if (info.isCull) 1 else 0
+    override val wireframe: Int = if (info.polygonMode == PolygonMode.WIREFRAME) 1 else 0
+    override val depthBias: Float
+    override val depthBiasSlope: Float
 
     // Index 0 is "no depth attachment", index n + 1 is depth format code n. 0 means not created yet.
     private val variants = LongArray(VARIANT_COUNT)
     private var broken = false
+
+    // The same variants for passes that carry a shader pack's extra colour targets. One layout at a time.
+    private val extraVariants = LongArray(VARIANT_COUNT)
+    private var extraLayout: IntArray? = null
 
     init {
         val depth = info.depthStencilState
@@ -43,7 +47,7 @@ internal class MetalPipeline(private val device: MetalDevice, val info: RenderPi
         if (shaders != null) {
             try {
                 shaderPair = compileShaders(shaders)
-                variants[MetalFormats.code(GpuFormat.D32_FLOAT) + 1] = create(MetalFormats.code(GpuFormat.D32_FLOAT))
+                variants[MetalFormats.code(GpuFormat.D32_FLOAT) + 1] = create(MetalFormats.code(GpuFormat.D32_FLOAT), null)
             } catch (e: NativeException) {
                 broken = true
                 LOGGER.error("Couldn't compile pipeline {}: {}", info.location, e.message)
@@ -64,40 +68,57 @@ internal class MetalPipeline(private val device: MetalDevice, val info: RenderPi
 
     override fun isValid(): Boolean = shaders != null && !broken
 
-    /** Native pipeline for a render pass whose depth attachment has [depthFormat] (or [MetalFormats.NO_FORMAT]). */
-    fun variant(depthFormat: Int): Long {
-        val existing = variants[depthFormat + 1]
+    override fun isUsable(): Boolean = isValid
+
+    override fun variant(depthFormat: Int, extraTargets: IntArray?): Long {
+        val cache = if (extraTargets == null) {
+            variants
+        } else {
+            if (!extraTargets.contentEquals(extraLayout)) {
+                releaseAll(extraVariants)
+                extraLayout = extraTargets
+            }
+            extraVariants
+        }
+        val existing = cache[depthFormat + 1]
         if (existing != 0L) return existing
         val created = try {
-            create(depthFormat)
+            create(depthFormat, extraTargets)
         } catch (e: NativeException) {
             broken = true
             LOGGER.error("Couldn't compile pipeline {} for depth format {}: {}", info.location, depthFormat, e.message)
             throw IllegalStateException("Pipeline ${info.location} could not be compiled for Metal", e)
         }
-        variants[depthFormat + 1] = created
+        cache[depthFormat + 1] = created
         return created
     }
 
-    fun destroy() {
-        for (i in variants.indices) {
-            if (variants[i] != 0L) {
-                Mcn.release.invokeExact(variants[i]) as Int
-                variants[i] = 0L
+    private fun releaseAll(handles: LongArray) {
+        for (i in handles.indices) {
+            if (handles[i] != 0L) {
+                // The frame being recorded may still draw with it.
+                device.encoder.releaseLater(handles[i])
+                handles[i] = 0L
             }
         }
+    }
+
+    fun destroy() {
+        releaseAll(variants)
+        releaseAll(extraVariants)
+        extraLayout = null
         if (shaderPair != 0L) {
-            Mcn.release.invokeExact(shaderPair) as Int
+            device.encoder.releaseLater(shaderPair)
             shaderPair = 0L
         }
     }
 
-    private fun create(depthFormat: Int): Long {
+    private fun create(depthFormat: Int, extraTargets: IntArray?): Long {
         check(shaderPair != 0L) { "Pipeline ${info.location} has no valid shaders" }
         val layout = ArrayList<Int>(64)
 
         val targets = info.colorTargetStates
-        layout.add(targets.size)
+        layout.add(targets.size + (extraTargets?.size ?: 0))
         for (target in targets) {
             val blend = target?.blendFunction()?.orElse(null)
             layout.add(if (target != null) MetalFormats.code(target.format()) else MetalFormats.NO_FORMAT)
@@ -109,6 +130,14 @@ internal class MetalPipeline(private val device: MetalDevice, val info: RenderPi
             layout.add(if (blend != null) MetalFormats.blendFactor(blend.color().destFactor()) else 0)
             layout.add(if (blend != null) MetalFormats.blendFactor(blend.alpha().sourceFactor()) else 0)
             layout.add(if (blend != null) MetalFormats.blendFactor(blend.alpha().destFactor()) else 0)
+        }
+
+        // A shader pack's extra targets are present in the pass but this pipeline does not write to them.
+        if (extraTargets != null) {
+            for (format in extraTargets) {
+                layout.add(format)
+                repeat(8) { layout.add(0) }
+            }
         }
 
         val depth = info.depthStencilState
