@@ -9,6 +9,7 @@
 #   scripts/run-tests.sh --scenes cave,nether # only some scenes
 #   scripts/run-tests.sh --save-baseline      # keep this run as the reference set for its backend
 #   scripts/run-tests.sh --stamp NAME         # reuse an output folder name, to group several backends
+#   scripts/run-tests.sh --metal-probe        # milestone M1: Metal draws a triangle in the game window, frame is checked
 #   scripts/run-tests.sh --fresh-worlds       # regenerate the cached test world (baselines must be re-saved)
 #
 # Output: run/test-output/<date-time>/<backend>/{<scene>.png, metrics.json, log.txt, game-output.log}
@@ -26,6 +27,7 @@ scenes=""
 save_baseline=false
 compare=true
 fresh_worlds=false
+metal_probe=false
 stamp="$(date +%Y%m%d-%H%M%S)"
 
 while [ $# -gt 0 ]; do
@@ -37,7 +39,8 @@ while [ $# -gt 0 ]; do
         --save-baseline) save_baseline=true ;;
         --no-compare) compare=false ;;
         --fresh-worlds) fresh_worlds=true ;;
-        -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --metal-probe) metal_probe=true; backend=metal; compare=false ;;
+        -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
     shift
@@ -51,6 +54,13 @@ esac
 if $save_baseline && [ -n "$scenes" ]; then
     echo "--save-baseline needs a full run; it cannot be combined with --scenes" >&2
     exit 2
+fi
+
+if $metal_probe; then
+    if $save_baseline || $benchmark || [ -n "$scenes" ] || [ "$backend" != metal ]; then
+        echo "--metal-probe runs on its own; it cannot be combined with --backend, --scenes, --benchmark or --save-baseline" >&2
+        exit 2
+    fi
 fi
 
 # The project builds with Temurin 25 only.
@@ -73,6 +83,8 @@ fi
 gradle_args=(runClientGameTest "-Pmetalcraft.backend=$backend" "-Pmetalcraft.test.outputDir=$out" "-Pmetalcraft.test.benchmark=$benchmark" "-Pmetalcraft.test.worldCache=$worlds")
 [ -n "$scenes" ] && gradle_args+=("-Pmetalcraft.test.scenes=$scenes")
 
+$metal_probe && gradle_args+=("-Pmetalcraft.probe.capture=$out/metal_window.png")
+
 echo "==> Running scenes on $backend (output: $out)"
 # caffeinate keeps the display awake; a sleeping display stops the game window from rendering.
 caffeinate -dims ./gradlew "${gradle_args[@]}" > "$out/game-output.log" 2>&1
@@ -91,6 +103,13 @@ fi
 if ! grep -q '"completed": true' "$out/metrics.json" 2>/dev/null; then
     echo "==> FAILED: $out/metrics.json is missing or incomplete" >&2
     exit 1
+fi
+
+if $metal_probe; then
+    echo "==> Metal window probe passed. Frame: $out/metal_window.png"
+    grep -E '"(width|height|clear_|triangle_)' "$out/metrics.json" | sed -E 's/"//g; s/,$//; s/^[[:space:]]+/    /'
+    echo "==> Done: $out"
+    exit 0
 fi
 
 echo "==> Screenshots: $(ls "$out"/*.png 2>/dev/null | wc -l | tr -d ' ')   log.txt lines: $(wc -l < "$out/log.txt" | tr -d ' ')"

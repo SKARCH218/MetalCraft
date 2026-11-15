@@ -33,7 +33,10 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Locale
 import java.util.function.Function
+import java.awt.image.BufferedImage
 import java.util.function.Supplier
+import javax.imageio.ImageIO
+import org.lwjgl.glfw.GLFW
 import kotlin.math.abs
 
 /**
@@ -47,6 +50,8 @@ import kotlin.math.abs
  * - `metalcraft.test.benchmark=true`: 10 s warm-up and 30 s measurement per scene instead of 2 s and 5 s.
  * - `metalcraft.test.scenes`: comma-separated scene names to run. Empty runs everything.
  * - `metalcraft.test.worldCache`: folder that keeps the generated normal world between runs.
+ * - `metalcraft.probe.capture`: milestone M1 mode. Only checks the PNG the Metal window probe saved there
+ *   during startup, then ends the run without visiting any scene.
  */
 class MetalCraftGameTest : FabricClientGameTest {
     override fun runTest(context: ClientGameTestContext) {
@@ -80,6 +85,12 @@ private class Harness(private val context: ClientGameTestContext) {
         Files.createDirectories(outputDir)
         LOGGER.info("Test output directory: {}", outputDir)
 
+        val probeCapture = System.getProperty("metalcraft.probe.capture")?.takeIf { it.isNotBlank() }
+        if (probeCapture != null) {
+            checkMetalWindowProbe(Path.of(probeCapture))
+            return
+        }
+
         var completed = false
         try {
             applyFixedOptions()
@@ -95,6 +106,63 @@ private class Harness(private val context: ClientGameTestContext) {
         // The run script appends this table to docs/benchmarks.md.
         if (benchmark) Files.writeString(outputDir.resolve("benchmark.md"), benchmarkTable.toString())
         LOGGER.info("Test run finished: {} scenes written to {}", sceneResults.size(), outputDir)
+    }
+
+    /**
+     * Milestone M1 check. The Metal backend drew a clear colour and a triangle into the game window before the
+     * game fell back to its own renderer; this verifies the frame it saved.
+     */
+    private fun checkMetalWindowProbe(capture: Path) {
+        var completed = false
+        val probe = JsonObject()
+        try {
+            if (!Files.isRegularFile(capture)) throw AssertionError("The Metal window probe saved no frame at $capture")
+            val image = ImageIO.read(capture.toFile()) ?: throw AssertionError("$capture is not a readable image")
+            val expected = context.onClient { client ->
+                val w = IntArray(1)
+                val h = IntArray(1)
+                GLFW.glfwGetFramebufferSize(client.window.handle(), w, h)
+                intArrayOf(w[0], h[0])
+            }
+            probe.addProperty("screenshot", capture.fileName.toString())
+            probe.addProperty("width", image.width)
+            probe.addProperty("height", image.height)
+            if (image.width != expected[0] || image.height != expected[1]) {
+                throw AssertionError("Probe frame is ${image.width}x${image.height}, the window framebuffer is ${expected[0]}x${expected[1]}")
+            }
+
+            // The probe clears to (0.1, 0.2, 0.4) and draws a triangle with red, green and blue corners between
+            // 20% and 80% of the window, so its centroid is an even grey and the area near each corner is one colour.
+            val w = image.width
+            val h = image.height
+            expectColor(probe, image, "clear_top_left", 8, 8, 26, 51, 102, 2)
+            expectColor(probe, image, "clear_bottom_right", w - 9, h - 9, 26, 51, 102, 2)
+            expectColor(probe, image, "triangle_centroid", w / 2, (h * 0.6).toInt(), 85, 85, 85, 6)
+            expectColor(probe, image, "triangle_top_red", w / 2, (h * 0.22).toInt(), 247, 4, 4, 12)
+            expectColor(probe, image, "triangle_left_green", (w * 0.22).toInt(), (h * 0.79).toInt(), 6, 244, 6, 16)
+            expectColor(probe, image, "triangle_right_blue", (w * 0.78).toInt(), (h * 0.79).toInt(), 6, 6, 244, 16)
+            completed = true
+            LOGGER.info("Metal window probe frame verified: {}x{}", w, h)
+        } finally {
+            report.addProperty("mode", "metal-window-probe")
+            report.addProperty("backend", context.onClient { RenderSystem.getDevice().deviceInfo.backendName().lowercase() })
+            report.addProperty("completed", completed)
+            report.add("metalWindowProbe", probe)
+            Files.writeString(outputDir.resolve("metrics.json"), GSON.toJson(report))
+        }
+    }
+
+    private fun expectColor(
+        probe: JsonObject, image: BufferedImage, name: String, x: Int, y: Int, red: Int, green: Int, blue: Int, tolerance: Int,
+    ) {
+        val rgb = image.getRGB(x, y)
+        val r = rgb shr 16 and 0xFF
+        val g = rgb shr 8 and 0xFF
+        val b = rgb and 0xFF
+        probe.addProperty(name, "$r,$g,$b")
+        if (abs(r - red) > tolerance || abs(g - green) > tolerance || abs(b - blue) > tolerance) {
+            throw AssertionError("Probe pixel '$name' at ($x, $y) is ($r, $g, $b), expected about ($red, $green, $blue)")
+        }
     }
 
     private fun selected(scene: String) = sceneFilter.isEmpty() || scene in sceneFilter

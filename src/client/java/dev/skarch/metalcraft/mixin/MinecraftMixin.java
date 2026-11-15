@@ -1,6 +1,7 @@
 package dev.skarch.metalcraft.mixin;
 
 import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
+import com.mojang.blaze3d.systems.GpuBackend;
 import dev.skarch.metalcraft.backend.BackendSelector;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.PreferredGraphicsApi;
@@ -19,5 +20,16 @@ public class MinecraftMixin {
     )
     private @Nullable PreferredGraphicsApi metalcraft$overrideForcedGraphicsApi(@Nullable PreferredGraphicsApi original) {
         return BackendSelector.overrideForcedApi(original);
+    }
+
+    @ModifyExpressionValue(
+        method = "<init>",
+        at = @At(
+            value = "INVOKE",
+            target = "Lnet/minecraft/client/PreferredGraphicsApi;getBackendsToTry()[Lcom/mojang/blaze3d/systems/GpuBackend;"
+        )
+    )
+    private GpuBackend[] metalcraft$addMetalBackend(GpuBackend[] original) {
+        return BackendSelector.backendsToTry(original);
     }
 }

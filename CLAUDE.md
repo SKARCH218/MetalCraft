@@ -151,6 +151,7 @@ scripts/run-tests.sh --backend vulkan     # 렌더러만 바꿔 실행 (opengl |
 scripts/run-tests.sh --benchmark          # 벤치마크: 장면마다 10초 워밍업 + 30초 측정, docs/benchmarks.md에 표 추가
 scripts/run-tests.sh --scenes cave,nether # 일부 장면만
 scripts/run-tests.sh --save-baseline      # 이번 실행을 기준 세트(run/test-baseline/<backend>)로 저장
+scripts/run-tests.sh --metal-probe        # M1 확인: 게임 창의 CAMetalLayer에 삼각형을 그리고 그 프레임을 검사 (약 30초)
 ```
 
 자동 테스트가 도는 동안 게임 창을 닫거나 Cmd+Q를 누르면 실행이 실패로 끝난다.
@@ -202,6 +203,8 @@ run/test-output/<날짜-시간>/<backend>/
 - 촬영 순간에 텍스처 애니메이션·구름·조명 깜빡임을 고정하고 파티클을 지운다. 비네트는 꺼 둔다. 그래서 같은 렌더러끼리는 픽셀 단위로 일치한다(차이 0.01% 미만).
 - `entities_fx`(아이템 드롭, 연기)와 `gui_f3`는 본질적으로 매번 달라서 픽셀 비교에서 빼고 눈으로만 확인한다.
 - 허용 기준: 채널 차이 8 초과인 픽셀이 0.5% 이하.
+- M1 상태: `-Dmetalcraft.backend=metal`이면 `MetalBackend`가 백엔드 목록 맨 앞에 들어가 창에 삼각형을 그린 뒤(`MetalWindowProbe`) 일부러 실패를 알려 기본 렌더러로 넘어간다. `-Dmetalcraft.probe.seconds=10`으로 삼각형을 오래 띄워 볼 수 있다. M2에서 실제 `GpuDevice`로 바꾼다.
+- Java 예외 한 곳: `backend/MetalBackendBase.java`. Mojang이 null을 넘기는데 non-null로 선언된 `GpuBackend.handleWindowCreationErrors`는 Kotlin으로 안전하게 오버라이드할 수 없어서 Java로 받는다.
 - Metal 백엔드는 게임테스트 API가 하는 화면 출력 크기 보정(`GlCommandEncoderMixin`, `VulkanGpuSurfaceMixin` 참고)을 직접 처리해야 한다.
 
 **실행 조건**
