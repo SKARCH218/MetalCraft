@@ -147,6 +147,7 @@ private class Harness(private val context: ClientGameTestContext) {
         context.onClient { client ->
             val options = client.options
             options.renderDistance().set(RENDER_DISTANCE)
+            Integer.getInteger("metalcraft.test.fov")?.let { options.fov().set(it) }
             options.enableVsync().set(false)
             options.framerateLimit().set(UNLIMITED_FRAMERATE)
             // The default throttles to 30 FPS after a minute without input, which a benchmark run always hits.
@@ -635,7 +636,8 @@ private class Harness(private val context: ClientGameTestContext) {
         // the baselines are 1920x1200).
         val WIDTH: Int = Integer.getInteger("metalcraft.test.width", 1920)
         val HEIGHT: Int = Integer.getInteger("metalcraft.test.height", 1200)
-        const val RENDER_DISTANCE = 12
+        // 12 chunks unless -Dmetalcraft.test.renderDistance asks for another value (for measurements only).
+        val RENDER_DISTANCE: Int = Integer.getInteger("metalcraft.test.renderDistance", 12)
         const val GUI_SCALE = 3
         const val UNLIMITED_FRAMERATE = 260
         const val NORMAL_WORLD_SEED = "2626"

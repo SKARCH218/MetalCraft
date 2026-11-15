@@ -103,3 +103,11 @@ Device: Apple M1 Max. Commit: 956f29c + local changes. Output: `run/test-output/
 | Scene | Avg FPS | 1% low FPS | Avg frame (ms) | p99 frame (ms) |
 |---|---:|---:|---:|---:|
 | plains_day | 58.05 | 46.49 | 17.23 | 21.07 |
+
+## 2026-11-16 01:34 · metal-create
+
+Device: Apple M1 Max. Commit: 3a96ae9 + local changes. Output: `run/test-output/20261116-013313/metal-create`.
+
+| Scene | Avg FPS | 1% low FPS | Avg frame (ms) | p99 frame (ms) |
+|---|---:|---:|---:|---:|
+| create | 99.37 | 60.94 | 10.06 | 15.40 |
