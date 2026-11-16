@@ -61,12 +61,17 @@ import java.util.OptionalDouble
  * through MetalCraft. Only referenced when Create is installed.
  */
 object MetalFlywheel {
+    /** Set by the first failure. Flywheel then stops choosing this backend instead of retrying every frame. */
+    @Volatile
+    @JvmField
+    var failed = false
+
     fun register() {
         SimpleBackend.builder()
             .engineFactory { level -> MetalEngine(level) }
             // Above Flywheel's own backends, which cannot work without OpenGL anyway.
             .priority(2000)
-            .supported { MetalDevice.current != null }
+            .supported { MetalDevice.current != null && !failed }
             .register(Identifier.fromNamespaceAndPath("metalcraft", "metal"))
         LOGGER.info("Flywheel backend for Metal registered")
     }
@@ -81,6 +86,7 @@ private class MetalEngine(level: LevelAccessor) : EngineImpl(level, MetalDrawMan
             drawManager().render(lightStorage(), environmentStorage())
         } catch (e: Exception) {
             LOGGER.error("Flywheel on Metal failed, Create falls back to its plain renderers", e)
+            MetalFlywheel.failed = true
             drawManager().triggerFallback()
         }
     }
@@ -255,7 +261,10 @@ private class MetalInstancer<I : Instance>(key: InstancerKey<I>, recreate: Recre
 /** One mesh of an instancer's model with its material: one instanced draw call. */
 private class FlwDraw(
     val instancer: MetalInstancer<*>, val mesh: FlwMesh, val material: Material, val environment: Environment, val bias: Int, val meshIndex: Int,
-)
+) {
+    /** Looked up before the pass opens each frame. */
+    var texture: net.minecraft.client.renderer.texture.AbstractTexture? = null
+}
 
 private class MetalDrawManager : DrawManager<MetalInstancer<*>>() {
     private val device = checkNotNull(MetalDevice.current) { "Metal is not active" }
@@ -307,6 +316,8 @@ private class MetalDrawManager : DrawManager<MetalInstancer<*>>() {
         if (draws.isEmpty()) return
 
         val minecraft = Minecraft.getInstance()
+        // A texture seen for the first time is loaded by this lookup, which cannot happen inside a pass.
+        for (i in draws.indices) draws[i].texture = minecraft.textureManager.getTexture(draws[i].material.texture())
         val target = minecraft.gameRenderer.mainRenderTarget()
         val descriptor = RenderPassDescriptor.create { "Flywheel" }
             .withColorAttachment(target.colorTextureView!!)
@@ -339,7 +350,7 @@ private class MetalDrawManager : DrawManager<MetalInstancer<*>>() {
                 pass.setUniform(FlwShaders.LIGHT_LUT_BLOCK, lightLut!!)
                 pass.setUniform(FlwShaders.LIGHT_SECTIONS_BLOCK, lightSections!!)
                 pass.setUniform(FlwShaders.DRAW_BLOCK, writeDraw(transient, draw))
-                val texture = minecraft.textureManager.getTexture(material.texture())
+                val texture = draw.texture!!
                 val filter = if (material.blur()) FilterMode.LINEAR else FilterMode.NEAREST
                 val own = texture.sampler
                 pass.bindTexture(
