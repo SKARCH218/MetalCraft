@@ -491,10 +491,10 @@ object ShaderPipeline {
      * Draws the opaque layers of [sections], and the translucent one too if asked, with the program and
      * bindings already set on [pass].
      */
-    internal fun drawShadowTerrain(pass: MetalRenderPass, sections: ChunkSectionsToRender, withTranslucent: Boolean = false) {
+    internal fun drawShadowTerrain(pass: MetalRenderPass, sections: ChunkSectionsToRender, translucentOnly: Boolean = false) {
         val sharedIndices = RenderSystem.getSequentialBuffer(PrimitiveTopology.QUADS)
         val defaultIndexBuffer = if (sections.maxIndicesRequired() == 0) null else sharedIndices.getBuffer(sections.maxIndicesRequired())
-        for (layer in if (withTranslucent) SHADOW_LAYERS_WITH_TRANSLUCENT else SHADOW_LAYERS) {
+        for (layer in if (translucentOnly) SHADOW_LAYERS_TRANSLUCENT else SHADOW_LAYERS) {
             val groups = sections.drawGroupsPerLayer()[layer] ?: continue
             for (draws in groups.values) {
                 pass.drawMultipleIndexed(draws, defaultIndexBuffer, sharedIndices.type(), chunkSectionUniform, sections.chunkSectionInfos())
@@ -790,7 +790,7 @@ object ShaderPipeline {
         add(RenderPipelines.ENTITY_SHADOW)
     }
     private val SHADOW_LAYERS = arrayOf(ChunkSectionLayer.SOLID, ChunkSectionLayer.CUTOUT)
-    private val SHADOW_LAYERS_WITH_TRANSLUCENT = arrayOf(ChunkSectionLayer.SOLID, ChunkSectionLayer.CUTOUT, ChunkSectionLayer.TRANSLUCENT)
+    private val SHADOW_LAYERS_TRANSLUCENT = arrayOf(ChunkSectionLayer.TRANSLUCENT)
 
     // Bindings of the geometry programs, as documented in pack_header.metal.
     private val TERRAIN_ENTRIES = arrayOf(

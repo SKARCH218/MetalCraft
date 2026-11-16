@@ -546,16 +546,17 @@ internal class ConvertedPack(
         device.encoder.clearColorTexture(shadowColors[0], clearWhite)
         device.encoder.clearColorTexture(shadowColors[1], clearWhite)
         val sections = ShaderPipeline.shadowSections(minecraft, shadowModelView, spec.shadowDistance, position.x, position.y, position.z, true)
-        // Opaque terrain alone first, then everything: the second pass leaves the colours of what is
-        // nearest to the light, translucent or not.
+        // Opaque terrain alone first. The second map starts as a copy of that depth and adds the translucent
+        // layer on top, which leaves the colours of what is nearest to the light, translucent or not.
         drawShadow(program, sections, shadowDepthView, false)
+        device.encoder.copyTextureToTexture(shadowDepth, shadowDepthAll, 0, 0, 0, 0, 0, spec.shadowResolution, spec.shadowResolution)
         drawShadow(program, sections, shadowDepthAllView, true)
     }
 
-    private fun drawShadow(program: Program, sections: ChunkSectionsToRender, depth: MetalTextureView, withTranslucent: Boolean) {
+    private fun drawShadow(program: Program, sections: ChunkSectionsToRender, depth: MetalTextureView, translucentOnly: Boolean) {
         val descriptor = RenderPassDescriptor.create { "MetalCraft shadow" }
         for (i in program.spec.targets.indices) descriptor.withColorAttachment(shadowColorViews[program.spec.targets[i]])
-        descriptor.withDepthAttachment(depth, OptionalDouble.of(1.0))
+        descriptor.withDepthAttachment(depth, if (translucentOnly) OptionalDouble.empty() else OptionalDouble.of(1.0))
             .withRenderArea(RenderPass.RenderArea(0, 0, spec.shadowResolution, spec.shadowResolution))
         val pass = device.encoder.createRenderPass(descriptor) as MetalRenderPass
         try {
@@ -565,7 +566,7 @@ internal class ConvertedPack(
             RenderSystem.getGlobalSettingsUniform()?.let { pass.setUniform("Globals", it) }
             pass.bindTexture("Sampler0", sections.textureView(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST))
             bindTextures(pass, program)
-            ShaderPipeline.drawShadowTerrain(pass, sections, withTranslucent)
+            ShaderPipeline.drawShadowTerrain(pass, sections, translucentOnly)
         } finally {
             device.encoder.submitRenderPass()
         }

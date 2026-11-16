@@ -78,6 +78,7 @@ private val STD140 = mapOf(
 )
 
 private val UNIFORM_LINE = Regex("""^\s*uniform\s+(bool|int|float|i?vec[234]|mat[34])\s+([^;]+);.*$""")
+private val OPTION_LINE = Regex("""^(\s*#define\s+(\w+)\s+)(\S+)(\s*//\s*\[.*)$""")
 private val INCLUDE_LINE = Regex("""^\s*#include\s+"([^"]+)"""")
 private val PACK_ATTRIBUTE = Regex("""^\s*(attribute|in)\s+vec[234]\s+(mc_Entity|mc_midTexCoord|at_tangent|at_midBlock)\s*;.*$""")
 private val TARGETS_COMMENT = Regex("""/\*\s*(DRAWBUFFERS|RENDERTARGETS)\s*:\s*([0-9,\s]+?)\s*\*/""")
@@ -419,12 +420,23 @@ private class Converter(private val source: Path, private val output: Path, priv
         return result.toString()
     }
 
+    /**
+     * A pack option is a `#define NAME value //[choices]` line. The port's `options` object replaces the
+     * value of the ones it names; all others keep the pack's default.
+     */
+    private fun option(line: String): String {
+        val options = port.getAsJsonObject("options") ?: return line
+        val match = OPTION_LINE.find(line) ?: return line
+        val value = options.get(match.groupValues[2]) ?: return line
+        return match.groupValues[1] + value.asString + match.groupValues[4]
+    }
+
     private fun inline(file: Path, into: StringBuilder, depth: Int) {
         if (depth > 16) throw ConvertException("#include nesting is too deep at $file")
         for (line in Files.readAllLines(file)) {
             val include = INCLUDE_LINE.find(line)
             if (include == null) {
-                into.append(line).append('\n')
+                into.append(option(line)).append('\n')
                 continue
             }
             val path = include.groupValues[1]
