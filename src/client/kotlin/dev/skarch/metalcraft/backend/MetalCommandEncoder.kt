@@ -178,7 +178,8 @@ internal class MetalCommandEncoder(private val device: MetalDevice) : CommandEnc
         Mcn.check(
             Mcn.passBegin.invokeExact(
                 context, colorCount, colorHandles, if (clearByDrawing) 0 else clearMask, clearColors,
-                depthView?.handle ?: 0L, if (clearDepth && !clearByDrawing) 1 else 0, depthValue, MemorySegment.NULL,
+                depthView?.handle ?: 0L, if (clearDepth && !clearByDrawing) 1 else 0, depthValue,
+                if (FrameTiming.gpuPasses) FrameTiming.passName(descriptor) else MemorySegment.NULL,
             ) as Int,
         )
         inRenderPass = true

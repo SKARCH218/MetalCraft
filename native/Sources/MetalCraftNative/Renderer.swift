@@ -62,6 +62,21 @@ final class MetalContext {
         self.queue = queue
     }
 
+    /// Per-pass GPU times, measured only when METALCRAFT_GPU_TIMING=1 is in the environment.
+    private(set) lazy var timing: GpuTiming? = GpuTiming(device: device)
+    private var timingBatch: GpuTiming.Batch?
+
+    /// Makes `descriptor`'s pass report when its vertex and fragment stages start and end.
+    func time(_ descriptor: MTLRenderPassDescriptor, name: String?) {
+        guard let timing else { return }
+        if timingBatch == nil { timingBatch = timing.batch() }
+        timingBatch?.attach(descriptor, name: name ?? "unnamed")
+    }
+
+    func countTimedFrame() {
+        timing?.frameShown()
+    }
+
     func commandBuffer() throws -> MTLCommandBuffer {
         if let commands { return commands }
         guard let created = queue.makeCommandBuffer() else { throw SurfaceError("Could not create a command buffer") }
@@ -91,6 +106,10 @@ final class MetalContext {
         nextSubmit += 1
         if let commands {
             commands.addCompletedHandler { [self] _ in markCompleted(index) }
+            if let batch = timingBatch, let timing {
+                commands.addCompletedHandler { _ in timing.finish(batch) }
+                timingBatch = nil
+            }
             commands.commit()
             self.commands = nil
         } else {
@@ -616,6 +635,7 @@ public func mcn_pass_begin(
             }
         }
         guard width > 0 else { throw SurfaceError("A render pass needs at least one attachment") }
+        ctx.time(descriptor, name: label(name))
         guard let encoder = try ctx.commandBuffer().makeRenderCommandEncoder(descriptor: descriptor) else {
             throw SurfaceError("Could not create a render encoder")
         }
@@ -994,6 +1014,7 @@ public func mcn_surface_blit(_ handle: Int, _ contextHandle: Int, _ texture: Int
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
         commands.present(drawable)
+        ctx.countTimedFrame()
         target.currentDrawable = nil
     }
 }

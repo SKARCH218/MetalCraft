@@ -218,6 +218,7 @@ run/test-output/<날짜-시간>/<backend>/
 - 이미지 방향은 Vulkan 백엔드와 같다(0번 행이 화면 아래). 그래서 정점 셰이더에서 y를 뒤집고 화면 출력 때 다시 뒤집는다.
 - vsync가 꺼져 있으면 drawable을 백그라운드 스레드가 받아 두고, 준비된 것이 없는 프레임은 그리기만 하고 화면에 내보내지 않는다(`DrawablePump`). 기다리면 FPS가 디스플레이 주사율에 묶인다.
 - `-Dmetalcraft.debug.timing=true`: 렌더 스레드가 백엔드 안에서 기다린 시간을 500프레임마다 로그로 남긴다.
+- 환경변수 `METALCRAFT_GPU_TIMING=1`: 렌더 패스별 GPU 시간(정점 + 프래그먼트 단계)을 5초마다 표준 오류로 출력한다(`native/.../GpuTiming.swift`, 자동 테스트에서는 `game-output.log`). 5120×2644 평원의 Complementary(프레임 약 29ms): 불투명 지형 6.6, composite1 4.1, deferred1 3.8, 그림자 3.3, composite6 2.3, composite7 2.0, composite4 1.7, 하늘 1.4ms.
 - M4 상태(쉐이더 엔진, `pipeline/ShaderPipeline.kt`): 팩 폴더는 `<게임 폴더>/shaderpacks/<이름>/`, 모드에 내장된 테스트 팩은 `src/client/resources/assets/metalcraft/shaderpacks/test/`. 팩 형식은 `pipeline/ShaderPack.kt` 주석, 바인딩 규칙과 공통 함수는 `assets/metalcraft/shaders/pack_header.metal`에 있다.
 - 팩 선택: 게임 안에서 K 키(조작 설정에서 변경 가능)로 순환, `config/metalcraft.properties`의 `shaderpack=`에 저장. `-Dmetalcraft.shaderpack=<이름>`이 있으면 그것이 우선한다. 컴파일에 실패한 팩은 로그를 남기고 꺼진다.
 - 프레임 흐름: `GameRendererMixin`이 월드 렌더링 앞뒤로 엔진을 부른다. 앞에서 그림자 패스를 돌리고, 월드를 그리는 동안 지형 파이프라인을 팩의 `gbuffers_terrain`으로 바꾸며 메인 이미지에 팩의 추가 버퍼를 함께 붙인다. 뒤에서 deferred → composite → final 전체화면 패스를 돌린다. 손과 GUI는 그 뒤에 게임이 그린다.

@@ -83,7 +83,10 @@ internal class ConvertedPack(
     /** Where one texture of a program comes from. */
     private class Slot(val entryName: String, val source: Int, val index: Int, val compare: Boolean, val image: Image?)
 
-    private class Program(val spec: ConvertedSpec.Program, val program: PackProgram, val slots: Array<Slot>, val stage: String)
+    private class Program(val spec: ConvertedSpec.Program, val program: PackProgram, val slots: Array<Slot>, val stage: String) {
+        /** The pass name seen in GPU captures and in the per-pass timing report. */
+        val label = java.util.function.Supplier { "pack " + spec.name }
+    }
 
     /**
      * What Flywheel's backend (`flywheel/MetalFlywheel.kt`) needs to draw Create's parts lit by this pack:
@@ -585,7 +588,7 @@ internal class ConvertedPack(
     private fun runPass(pass: Program, target: Upscaler.WorldTarget) {
         val isFinal = pass.spec.name == FINAL
         val targets = pass.spec.targets
-        val descriptor = RenderPassDescriptor.create { "MetalCraft pack pass" }
+        val descriptor = RenderPassDescriptor.create(pass.label)
         var outWidth = target.width
         var outHeight = target.height
         if (isFinal) {
