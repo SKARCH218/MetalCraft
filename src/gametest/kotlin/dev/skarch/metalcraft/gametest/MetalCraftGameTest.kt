@@ -411,6 +411,29 @@ private class Harness(private val context: ClientGameTestContext) {
                 context.waitForScreen(net.minecraft.client.gui.screens.options.VideoSettingsScreen::class.java)
                 capture("gui_video", OVERWORLD, pixelCompare = false, benchmarkable = false)
                 closeScreen()
+                // Closing the settings screen applies a changed MetalFX mode without a restart.
+                if (System.getProperty("metalcraft.upscale") == null) {
+                    val config = dev.skarch.metalcraft.config.MetalCraftConfig
+                    val before = config.upscale
+                    val beforeScale = config.renderScale
+                    for (step in 0..1) {
+                        context.onClient {
+                            config.upscale = if (step == 0) "spatial" else before
+                            config.renderScale = if (step == 0) 50 else beforeScale
+                            it.gui.setScreen(dev.skarch.metalcraft.config.ShaderSettingsScreen(null))
+                        }
+                        context.waitForScreen(dev.skarch.metalcraft.config.ShaderSettingsScreen::class.java)
+                        context.onClient { it.gui.screen()?.onClose() }
+                        context.waitTicks(60)
+                        if (step == 0) {
+                            context.onClient { it.gui.setScreen(dev.skarch.metalcraft.config.ShaderSettingsScreen(null)) }
+                            context.waitForScreen(dev.skarch.metalcraft.config.ShaderSettingsScreen::class.java)
+                            capture("gui_shaders_metalfx", OVERWORLD, pixelCompare = false, benchmarkable = false)
+                            closeScreen()
+                            context.waitTicks(60)
+                        }
+                    }
+                }
             }
             // The renderer has to survive the window changing size and every texture and shader being
             // reloaded. The view turns away from the mobs, whose poses depend on how long the reload took.

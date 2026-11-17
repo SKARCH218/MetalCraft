@@ -72,8 +72,8 @@ object Upscaler {
     @JvmField
     internal var redirect: Redirect? = null
 
-    private val mode: Mode
-    private val scalePercent: Int
+    private var mode = Mode.OFF
+    private var scalePercent = 100
     private var failed = false
 
     private var state: Targets? = null
@@ -105,6 +105,10 @@ object Upscaler {
     private val motionSign = java.lang.Float.parseFloat(System.getProperty("metalcraft.debug.motionSign", "1"))
 
     init {
+        readSettings()
+    }
+
+    private fun readSettings() {
         val requested = (System.getProperty(MODE_PROPERTY) ?: MetalCraftConfig.upscale).trim().lowercase()
         mode = when (requested) {
             "spatial" -> Mode.SPATIAL
@@ -119,8 +123,25 @@ object Upscaler {
         scalePercent = percent.coerceIn(50, 100)
     }
 
+    /**
+     * Takes the mode and render scale from the settings again and rebuilds the images on the next frame.
+     * Called on the render thread, between frames, when the settings screen closes.
+     */
+    fun reconfigure() {
+        readSettings()
+        failed = false
+        redirect = null
+        state?.destroy()
+        state = null
+        historyValid = false
+    }
+
     /** The mode in use and the render scale in percent, for display. */
-    fun describe(): String = if (isActive()) "$mode $scalePercent%" else "off"
+    fun describe(): String {
+        if (!isActive()) return "off"
+        val targets = state ?: return "${mode.name.lowercase()} $scalePercent%"
+        return "${mode.name.lowercase()} $scalePercent% (${targets.width}x${targets.height} -> ${targets.fullWidth}x${targets.fullHeight})"
+    }
 
     private fun isActive(): Boolean = !failed && mode != Mode.OFF && !(mode == Mode.SPATIAL && scalePercent == 100)
 

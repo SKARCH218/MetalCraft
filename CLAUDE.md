@@ -223,7 +223,7 @@ run/test-output/<날짜-시간>/<backend>/
 - 팩 선택: 게임 안에서 K 키(조작 설정에서 변경 가능)로 순환, `config/metalcraft.properties`의 `shaderpack=`에 저장. `-Dmetalcraft.shaderpack=<이름>`이 있으면 그것이 우선한다. 컴파일에 실패한 팩은 로그를 남기고 꺼진다.
 - 프레임 흐름: `GameRendererMixin`이 월드 렌더링 앞뒤로 엔진을 부른다. 앞에서 그림자 패스를 돌리고, 월드를 그리는 동안 지형 파이프라인을 팩의 `gbuffers_terrain`으로 바꾸며 메인 이미지에 팩의 추가 버퍼를 함께 붙인다. 뒤에서 deferred → composite → final 전체화면 패스를 돌린다. 손과 GUI는 그 뒤에 게임이 그린다.
 - M4에서 아직 없는 것: 엔티티 등 지형 이외의 팩 프로그램과 그림자, 카메라 시야 밖 물체의 그림자, "향상된 투명도" 설정과의 동시 사용(켜져 있으면 팩을 건너뜀), gbuffers 인스턴싱 버전(M6에서 Flywheel과 함께), deferred를 불투명 지오메트리 직후에 돌리는 것(지금은 월드 전체가 끝난 뒤).
-- M5 상태(MetalFX, `upscale/Upscaler.kt`): `config/metalcraft.properties`의 `upscale=off|spatial|temporal`, `render_scale=50~100`(다음 실행부터 적용). `-Dmetalcraft.upscale`, `-Dmetalcraft.renderScale`이 있으면 그것이 우선한다.
+- M5 상태(MetalFX, `upscale/Upscaler.kt`): `config/metalcraft.properties`의 `upscale=off|spatial|temporal`, `render_scale=50~100`(쉐이더 설정 화면에서 바꾸면 바로, 파일을 직접 고치면 다음 실행부터 적용). `-Dmetalcraft.upscale`, `-Dmetalcraft.renderScale`이 있으면 그것이 우선한다.
 - 업스케일링 중에는 월드를 작은 이미지에 그린다. 백엔드가 게임의 메인 색·깊이 이미지로 가는 패스와 클리어를 작은 이미지로 돌려 보내고(`Upscaler.redirect`), 월드와 쉐이더팩 패스가 끝나면 MetalFX가 메인 이미지로 키운다. 손과 GUI는 그 뒤에 원래 해상도로 그려진다.
 - 시간 모드는 프로젝션에 서브픽셀 지터를 넣고, 깊이와 카메라 이동으로 모션 이미지를 만든다(`upscale_motion.fsh.metal`). 지터와 모션의 부호는 실험으로 정했다(원본 해상도와의 차이, 회전 중 프레임의 선명도).
 - M5에서 아직 없는 것: 스스로 움직이는 것(엔티티, 이후 Create 장치)의 모션 벡터, 프레임 보간, 게임 내 설정 화면.
@@ -250,8 +250,8 @@ run/test-output/<날짜-시간>/<backend>/
 - create 장면(축·톱니 1,536개, 1920×1200): Metal 팩 없음 약 864 FPS(Flywheel 꺼진 폴백은 100, OpenGL의 Flywheel 인스턴싱은 184), Metal + Complementary 약 170 FPS(폴백 81), Iris + Complementary 약 40 FPS(Iris는 팩이 켜지면 Flywheel이 꺼진다).
 - 부품을 4배로 늘린 create 장면(약 6,100개, `-Pmetalcraft.test.createLayers=8`): Metal + Complementary 약 151 FPS, Iris + Complementary 약 13 FPS, Metal 팩 없음 약 494 FPS.
 - Flywheel 백엔드에 아직 없는 것: 블록 파괴 오버레이(crumbling), 순서 무관 투명도(일반 반투명으로 그림), Flywheel 디버그 보고서의 메시 풀 항목, 팩 그림자맵에 Create 부품 그리기, 컨트랩션(움직이는 구조물)과 벨트·유체 등 다른 인스턴스 타입의 화면 검증.
-- 비디오 설정의 Graphics API에 "Metal"이 추가돼 있다(`PreferredGraphicsApiMixin`이 enum에 값을 덧붙인다). Metal을 고르면 Metal, OpenGL·Vulkan을 고르면 게임 렌더러, "기본"이면 `config/metalcraft.properties`의 `renderer`를 따른다(`BackendSelector`가 options.txt를 직접 읽는다). 재시작 후 적용.
-- 쉐이더 설정 화면(`config/ShaderSettingsScreen.kt`): 팩 목록(클릭하면 바로 전환), MetalFX 방식과 렌더 스케일(재시작 후 적용), 팩 폴더 열기. 비디오 설정 오른쪽 위의 "쉐이더..." 버튼이나 O 키로 연다. Iris의 화면 코드는 쓰지 않았다(LGPL). 자동 테스트의 `gui_shaders` 장면이 이 화면과 비디오 설정 화면을 찍는다(눈으로 확인용).
+- 비디오 설정의 Graphics API 버튼은 Metal 사용 중 "Metal"로 표시되고 잠겨 있다(2026-11-18 사용자 결정; `PreferredGraphicsApiMixin`이 enum에 값을 덧붙이고 `MetalCraftClient.lockGraphicsApi`가 잠근다). 게임 렌더러로 돌아가려면 `config/metalcraft.properties`의 `renderer=vanilla`.
+- 쉐이더 설정 화면(`config/ShaderSettingsScreen.kt`): 팩 목록(클릭하면 바로 전환), MetalFX 방식과 렌더 스케일, 현재 적용 중인 MetalFX 상태 표시, 팩 폴더 열기. 완료를 누르면 MetalFX 설정을 다시 읽고(`Upscaler.reconfigure`) 리소스를 리로드한다(재시작 불필요). 비디오 설정 오른쪽 위의 "쉐이더..." 버튼이나 O 키로 연다. Iris의 화면 코드는 쓰지 않았다(LGPL). 자동 테스트의 `gui_shaders` 장면이 이 화면과 비디오 설정 화면을 찍는다(눈으로 확인용).
 - 아직 없는 것: 게임 안에서 바꾸는 팩별 옵션 화면, GPU 타임스탬프 쿼리(F3의 GPU 사용률은 의미 없음), multi-draw·indirect draw(장치 기능으로 꺼 둠), 렌더 영역이 일부인 패스의 색·깊이 단독 클리어.
 - Java 예외 한 곳: `backend/MetalBackendBase.java`. Mojang이 null을 넘기는데 non-null로 선언된 `GpuBackend.handleWindowCreationErrors`는 Kotlin으로 안전하게 오버라이드할 수 없어서 Java로 받는다.
 - Metal 백엔드는 게임테스트 API가 하는 화면 출력 크기 보정(`GlCommandEncoderMixin`, `VulkanGpuSurfaceMixin` 참고)을 직접 처리해야 한다.

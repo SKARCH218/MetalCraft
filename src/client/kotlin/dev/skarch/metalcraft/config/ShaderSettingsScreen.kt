@@ -21,7 +21,7 @@ import java.nio.file.Files
 
 /**
  * The shader settings: the list of installed packs (a click switches at once) and the MetalFX settings,
- * which apply at the next start. Opened from the video settings and with a key.
+ * which apply when the screen is closed. Opened from the video settings and with a key.
  */
 class ShaderSettingsScreen(private val lastScreen: Screen?) : Screen(Component.translatable("metalcraft.shaders.title")) {
     private val layout = HeaderAndFooterLayout(this, 33, FOOTER_HEIGHT)
@@ -43,7 +43,9 @@ class ShaderSettingsScreen(private val lastScreen: Screen?) : Screen(Component.t
                 },
         )
         upscaling.addChild(RenderScaleSlider())
-        footer.addChild(StringWidget(Component.translatable("metalcraft.shaders.restart_note").withColor(NOTE_COLOR), font))
+        footer.addChild(
+            StringWidget(Component.translatable("metalcraft.shaders.active", dev.skarch.metalcraft.upscale.Upscaler.describe()).withColor(NOTE_COLOR), font),
+        )
         val buttons = footer.addChild(LinearLayout.horizontal().spacing(8))
         buttons.addChild(
             Button.builder(Component.translatable("metalcraft.shaders.open_folder")) { openFolder() }.width(BUTTON_WIDTH).build(),
@@ -59,8 +61,13 @@ class ShaderSettingsScreen(private val lastScreen: Screen?) : Screen(Component.t
         list?.updateSize(width, layout)
     }
 
+    /** Done applies the MetalFX settings and reloads resources, as F3+T does. */
     override fun onClose() {
         minecraft.gui.setScreen(lastScreen)
+        if (MetalDevice.current != null) {
+            dev.skarch.metalcraft.upscale.Upscaler.reconfigure()
+            minecraft.reloadResourcePacks()
+        }
     }
 
     private fun openFolder() {

@@ -48,12 +48,33 @@ class MetalCraftClient : ClientModInitializer {
         }
         net.fabricmc.fabric.api.client.screen.v1.ScreenEvents.AFTER_INIT.register { client, screen, width, _ ->
             if (screen is net.minecraft.client.gui.screens.options.VideoSettingsScreen) {
+                lockGraphicsApi(client, screen)
                 net.fabricmc.fabric.api.client.screen.v1.Screens.getWidgets(screen).add(
                     net.minecraft.client.gui.components.Button.builder(Component.translatable("metalcraft.shaders.button")) {
                         client.gui.setScreen(dev.skarch.metalcraft.config.ShaderSettingsScreen(screen))
                     }.bounds(width - 106, 6, 100, 20).build(),
                 )
             }
+        }
+    }
+
+    /** While Metal is in use the Graphics API button shows "Metal" and cannot be changed. */
+    private fun lockGraphicsApi(client: net.minecraft.client.Minecraft, screen: net.minecraft.client.gui.screens.Screen) {
+        if (MetalDevice.current == null) return
+        val option = client.options.preferredGraphicsBackend()
+        val metal = net.minecraft.client.PreferredGraphicsApi.valueOf("METAL")
+        if (option.get() != metal) option.set(metal)
+        // The game compares against what it started with to warn that a restart is needed; it started on Metal.
+        (client.options as dev.skarch.metalcraft.mixin.OptionsAccessor).`metalcraft$setGraphicsApiFromStartup`(metal)
+        for (widget in net.fabricmc.fabric.api.client.screen.v1.Screens.getWidgets(screen)) {
+            if (widget !is net.minecraft.client.gui.components.OptionsList) continue
+            val button = widget.findOption(option) ?: continue
+            if (button is net.minecraft.client.gui.components.CycleButton<*>) {
+                @Suppress("UNCHECKED_CAST")
+                (button as net.minecraft.client.gui.components.CycleButton<net.minecraft.client.PreferredGraphicsApi>).setValue(metal)
+            }
+            button.active = false
+            button.setTooltip(net.minecraft.client.gui.components.Tooltip.create(Component.translatable("metalcraft.graphics_api.locked")))
         }
     }
 

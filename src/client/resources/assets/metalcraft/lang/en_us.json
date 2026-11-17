@@ -11,8 +11,9 @@
   "metalcraft.shaders.upscale.spatial": "Spatial",
   "metalcraft.shaders.upscale.temporal": "Temporal",
   "metalcraft.shaders.render_scale": "Render Scale: %s%%",
-  "metalcraft.shaders.restart_note": "Upscaling and render scale apply after a restart",
   "metalcraft.shaders.open_folder": "Open Shader Packs Folder",
   "metalcraft.shaders.button": "Shaders...",
-  "key.metalcraft.shader_settings": "Shader Settings"
+  "key.metalcraft.shader_settings": "Shader Settings",
+  "metalcraft.shaders.active": "MetalFX in use now: %s",
+  "metalcraft.graphics_api.locked": "MetalCraft renders with Metal. To use Minecraft's own renderer, set renderer=vanilla in config/metalcraft.properties."
 }

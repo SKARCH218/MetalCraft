@@ -10,8 +10,8 @@ import net.minecraft.client.PreferredGraphicsApi
  * Decides which renderer the game starts on.
  *
  * `-Dmetalcraft.backend=opengl|vulkan|metal` pins it, so the same test run can be repeated on every backend.
- * Without the property, the Graphics API choice in the video settings decides: "Metal", OpenGL or Vulkan.
- * "Default" uses Metal when `config/metalcraft.properties` says so (which it does unless changed).
+ * Without the property, Metal is used when `config/metalcraft.properties` says so (the default). The
+ * Graphics API button in the video settings then shows "Metal" and is locked.
  */
 object BackendSelector {
     const val PROPERTY = "metalcraft.backend"
@@ -38,17 +38,7 @@ object BackendSelector {
 
     private val metalRequested: Boolean by lazy {
         val requested = System.getProperty(PROPERTY)?.trim()?.lowercase()
-        val useMetal = if (requested != null) {
-            requested == "metal"
-        } else {
-            // The Graphics API choice in the video settings: "Metal" (added by this mod), the game's own
-            // renderers, or "Default", which follows config/metalcraft.properties.
-            when (videoSetting()) {
-                "metal" -> true
-                "opengl", "vulkan" -> false
-                else -> MetalCraftConfig.useMetalRenderer
-            }
-        }
+        val useMetal = if (requested != null) requested == "metal" else MetalCraftConfig.useMetalRenderer
         // Sodium 0.9 draws chunks with its own OpenGL or Vulkan calls, not through Blaze3D, so it cannot run
         // on another backend. Starting Metal next to it would crash on the first frame.
         if (useMetal && FabricLoader.getInstance().isModLoaded("sodium")) {
@@ -57,19 +47,6 @@ object BackendSelector {
         } else {
             useMetal
         }
-    }
-
-    /**
-     * The saved Graphics API choice, read from options.txt directly: this is needed before the game has
-     * loaded its options.
-     */
-    private fun videoSetting(): String? = try {
-        val file = FabricLoader.getInstance().gameDir.resolve("options.txt")
-        if (!java.nio.file.Files.exists(file)) null
-        else java.nio.file.Files.readAllLines(file).firstOrNull { it.startsWith("preferredGraphicsBackend:") }
-            ?.substringAfter(':')?.trim()?.trim('"')?.lowercase()
-    } catch (e: java.io.IOException) {
-        null
     }
 
     /**

@@ -11,8 +11,9 @@
   "metalcraft.shaders.upscale.spatial": "공간",
   "metalcraft.shaders.upscale.temporal": "시간",
   "metalcraft.shaders.render_scale": "렌더 스케일: %s%%",
-  "metalcraft.shaders.restart_note": "업스케일과 렌더 스케일은 재시작 후 적용됩니다",
   "metalcraft.shaders.open_folder": "쉐이더팩 폴더 열기",
   "metalcraft.shaders.button": "쉐이더...",
-  "key.metalcraft.shader_settings": "쉐이더 설정"
+  "key.metalcraft.shader_settings": "쉐이더 설정",
+  "metalcraft.shaders.active": "현재 적용 중인 MetalFX: %s",
+  "metalcraft.graphics_api.locked": "MetalCraft는 Metal로 렌더링합니다. 게임 기본 렌더러를 쓰려면 config/metalcraft.properties에서 renderer=vanilla로 바꾸세요."
 }
