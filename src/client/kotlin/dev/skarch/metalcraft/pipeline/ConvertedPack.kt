@@ -143,6 +143,8 @@ internal class ConvertedPack(
 
     private val colors = arrayOfNulls<Color>(16)
     private val images = HashMap<String, Image>()
+    /** Colour buffers that world programs both read and write, see [slots]. */
+    private val snapshots = it.unimi.dsi.fastutil.ints.IntArrayList()
     private val programs = ArrayList<PackProgram>()
     private val passes = ArrayList<Program>()
     private var terrain: Program? = null
@@ -364,6 +366,20 @@ internal class ConvertedPack(
         when {
             image != null -> Slot(texture.name, SOURCE_IMAGE, 0, false, image)
             name in ATLAS_NAMES -> Slot("Sampler0", SOURCE_GAME, 0, false, null)
+            // A world program cannot read an image it is drawing into. It reads a copy made once the opaque
+            // world and the deferred passes are done, which is what translucent things want to see behind them.
+            stage == "gbuffers" && name.startsWith("colortex") && name.removePrefix("colortex").toInt() in program.targets -> {
+                val index = name.removePrefix("colortex").toInt()
+                if (!snapshots.contains(index)) {
+                    snapshots.add(index)
+                    // World programs are built when first drawn; the second image is made with the next frame.
+                    if (!color(index).needsAlt) {
+                        color(index).needsAlt = true
+                        width = 0
+                    }
+                }
+                Slot(texture.name, SOURCE_COLOR_SNAPSHOT, index, false, null)
+            }
             name.startsWith("colortex") -> Slot(texture.name, SOURCE_COLOR, color(name.removePrefix("colortex").toInt()).spec.index, false, null)
             name == "depthtex0" -> Slot(texture.name, SOURCE_DEPTH0, 0, false, null)
             name == "depthtex1" || name == "depthtex2" -> Slot(texture.name, SOURCE_DEPTH1, 0, false, null)
@@ -524,6 +540,12 @@ internal class ConvertedPack(
         copyDepth(target.depthView, depth1View!!)
         copyDepth(target.depthView, depth0View!!)
         for (pass in passes) if (pass.stage == "deferred") runPass(pass, target)
+        for (i in 0 until snapshots.size) {
+            val color = color(snapshots.getInt(i))
+            val from = color.texture!!
+            val copy = color.altTexture ?: continue
+            device.encoder.copyTextureToTexture(from, copy, 0, 0, 0, 0, 0, from.getWidth(0), from.getHeight(0))
+        }
         // The deferred passes may have flipped buffers the translucent programs write to.
         gbuffer(target.colorTexture)
     }
@@ -668,6 +690,7 @@ internal class ConvertedPack(
                 SOURCE_GAME -> {}
                 SOURCE_IMAGE -> pass.bindTexture(slot.entryName, slot.image!!.view, if (slot.image.repeat) linearRepeat else linear)
                 SOURCE_COLOR -> pass.bindTexture(slot.entryName, color(slot.index).view!!, linear)
+                SOURCE_COLOR_SNAPSHOT -> pass.bindTexture(slot.entryName, color(slot.index).altView ?: color(slot.index).view!!, linear)
                 SOURCE_DEPTH0 -> pass.bindTexture(slot.entryName, depth0View!!, nearest)
                 SOURCE_DEPTH1 -> pass.bindTexture(slot.entryName, depth1View!!, nearest)
                 SOURCE_SHADOW_DEPTH -> pass.bindTexture(
@@ -1054,6 +1077,7 @@ internal class ConvertedPack(
         const val SOURCE_DEPTH1 = 4
         const val SOURCE_SHADOW_DEPTH = 5
         const val SOURCE_SHADOW_COLOR = 6
+        const val SOURCE_COLOR_SNAPSHOT = 7
 
         // Custom uniforms of the Complementary family of packs: 1 while the camera is in the biome.
         val BIOME_UNIFORMS = arrayOf(
