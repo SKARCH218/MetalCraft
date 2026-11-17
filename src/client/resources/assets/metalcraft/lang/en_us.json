@@ -1,4 +1,5 @@
 {
+  "options.graphicsApi.metal": "Metal",
   "key.metalcraft.zoom": "Zoom",
   "key.metalcraft.cycle_shaderpack": "Next Shader Pack",
   "metalcraft.shaderpack.selected": "Shader pack: %s",
