@@ -282,6 +282,16 @@ private class Harness(private val context: ClientGameTestContext) {
                 worldScene("night_torches", world, OVERWORLD, view)
             }
 
+            if (selected("held_light")) {
+                // Night, looking away from the placed torches, with a torch in the hand: shader packs light
+                // the ground around the player from it.
+                world.server.runCommand("time set 18000")
+                world.server.runCommand("item replace entity @a weapon.mainhand with minecraft:torch")
+                val view = Viewpoint(plains.x + 0.5, plains.y + 2.0, plains.z + 0.5, 90f, 30f)
+                worldScene("held_light", world, OVERWORLD, view)
+                world.server.runCommand("item replace entity @a weapon.mainhand with minecraft:air")
+            }
+
             if (selected("cave")) {
                 world.server.runCommand("time set 6000")
                 val view = world.server.onServer { server ->
@@ -652,7 +662,7 @@ private class Harness(private val context: ClientGameTestContext) {
         const val OVERWORLD = "minecraft:overworld"
         const val NETHER = "minecraft:the_nether"
 
-        val NORMAL_WORLD_SCENES = listOf("plains_day", "ocean", "underwater", "night_torches", "cave", "nether")
+        val NORMAL_WORLD_SCENES = listOf("plains_day", "ocean", "underwater", "night_torches", "held_light", "cave", "nether")
         val FLAT_WORLD_SCENES = listOf("create", "entities", "gui_inventory", "after_reload", "gui_chat", "entities_fx", "gui_f3")
         val ALL_SCENES = (NORMAL_WORLD_SCENES + FLAT_WORLD_SCENES).toSet()
 

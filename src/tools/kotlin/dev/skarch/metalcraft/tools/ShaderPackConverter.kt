@@ -166,6 +166,7 @@ private class Converter(private val source: Path, private val output: Path, priv
         manifest.add("buffers", buffers())
         manifest.add("textures", textures())
         blockIds()?.let { manifest.addProperty("blockIds", it) }
+        itemIds()?.let { manifest.addProperty("itemIds", it) }
         port.get("separateAo")?.let { manifest.add("separateAo", it) }
         manifest.add("dimensions", manifestDimensions)
         manifest.addProperty("uniformBlockSize", uniforms.size)
@@ -319,8 +320,13 @@ private class Converter(private val source: Path, private val output: Path, priv
      * The pack's block ID table with its version conditions resolved (`#if MC_VERSION >= n`, `#else`, `#endif`;
      * every other line starting with `#` is a comment). Returns the name of the file written, or null.
      */
-    private fun blockIds(): String? {
-        val file = source.resolve("block.properties")
+    private fun blockIds(): String? = idTable("block.properties", "block.", "blocks.properties")
+
+    /** The pack's item IDs (`heldItemId`), resolved the same way. */
+    private fun itemIds(): String? = idTable("item.properties", "item.", "items.properties")
+
+    private fun idTable(name: String, prefix: String, outputName: String): String? {
+        val file = source.resolve(name)
         if (!file.exists()) return null
         val result = StringBuilder()
         val active = ArrayDeque<Boolean>()
@@ -340,15 +346,15 @@ private class Converter(private val source: Path, private val output: Path, priv
                         },
                     )
                 }
-                trimmed.startsWith("#if") -> throw ConvertException("block.properties: unsupported condition '$trimmed'")
+                trimmed.startsWith("#if") -> throw ConvertException("$name: unsupported condition '$trimmed'")
                 trimmed.startsWith("#else") -> active.addLast(!active.removeLast())
                 trimmed.startsWith("#endif") -> active.removeLast()
                 trimmed.startsWith("#") || trimmed.isEmpty() -> {}
-                active.all { it } && trimmed.startsWith("block.") -> result.append(trimmed).append('\n')
+                active.all { it } && trimmed.startsWith(prefix) -> result.append(trimmed).append('\n')
             }
         }
-        Files.writeString(output.resolve("blocks.properties"), result.toString())
-        return "blocks.properties"
+        Files.writeString(output.resolve(outputName), result.toString())
+        return outputName
     }
 
     /** Image files the pack binds in place of buffers; they are copied next to the converted shaders. */

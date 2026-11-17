@@ -67,6 +67,8 @@ internal class ShaderPack private constructor(val id: String, private val root: 
 
     /** File with the pack's block IDs (see [BlockIds]), or null. */
     val blockIdsFile: String? = manifest.get("blockIds")?.asString
+    /** Optional: `item.<id>=<item names>` lines, the IDs the pack sees in `heldItemId`. */
+    val itemIdsFile: String? = manifest.get("itemIds")?.asString
 
     init {
         val declared = LinkedHashMap<String, BufferSpec>()

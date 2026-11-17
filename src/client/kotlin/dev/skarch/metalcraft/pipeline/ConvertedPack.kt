@@ -166,6 +166,7 @@ internal class ConvertedPack(
     private var depth1View: MetalTextureView? = null
     // shadowtex1: what opaque terrain casts. shadowtex0: the same plus translucent terrain such as water.
     // A pack compares the two to find light that has passed through water or stained glass.
+    private val itemIds = loadItemIds()
     private val shadowDepth: MetalTexture
     private val shadowDepthView: MetalTextureView
     private val shadowDepthAll: MetalTexture
@@ -774,6 +775,15 @@ internal class ConvertedPack(
         }
         integer("isEyeInWater", inWater)
 
+        // What the player holds: the light it gives off and the pack's own ID for it.
+        val player = minecraft.player
+        val mainHand = player?.mainHandItem
+        val offHand = player?.offhandItem
+        integer("heldBlockLightValue", heldLight(mainHand))
+        integer("heldBlockLightValue2", heldLight(offHand))
+        integer("heldItemId", heldId(mainHand))
+        integer("heldItemId2", heldId(offHand))
+
         var blockLight = 0
         var skyLight = 15
         if (level != null) {
@@ -835,6 +845,29 @@ internal class ConvertedPack(
     private fun float(name: String, value: Float) {
         val at = offset(name, "float")
         if (at >= 0) data.putFloat(at, value)
+    }
+
+    private fun heldLight(stack: net.minecraft.world.item.ItemStack?): Int {
+        val item = stack?.item
+        return if (item is net.minecraft.world.item.BlockItem) item.block.defaultBlockState().lightEmission else 0
+    }
+
+    private fun heldId(stack: net.minecraft.world.item.ItemStack?): Int = if (stack == null) 0 else itemIds.getInt(stack.item)
+
+    /** The pack's `item.<id>=<names>` table as a lookup by item. Items it does not name are 0. */
+    private fun loadItemIds(): it.unimi.dsi.fastutil.objects.Reference2IntOpenHashMap<net.minecraft.world.item.Item> {
+        val table = it.unimi.dsi.fastutil.objects.Reference2IntOpenHashMap<net.minecraft.world.item.Item>()
+        val text = pack.itemIdsFile?.let(pack::read) ?: return table
+        for (line in text.lineSequence()) {
+            val separator = line.indexOf('=')
+            if (!line.startsWith("item.") || separator < 0) continue
+            val id = line.substring(5, separator).trim().toIntOrNull() ?: continue
+            for (name in line.substring(separator + 1).trim().split(Regex("\\s+"))) {
+                val key = net.minecraft.resources.Identifier.tryParse(name) ?: continue
+                net.minecraft.core.registries.BuiltInRegistries.ITEM.getOptional(key).ifPresent { table.put(it, id) }
+            }
+        }
+        return table
     }
 
     private fun integer(name: String, value: Int) {

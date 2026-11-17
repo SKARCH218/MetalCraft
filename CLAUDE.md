@@ -241,7 +241,10 @@ run/test-output/<날짜-시간>/<backend>/
 - 팩 프로그램이 없는 게임 파이프라인(블록 외곽선, 비, 번개, 이름표, 움직이는 블록 등)은 게임 셰이더가 팩의 색 버퍼에 직접 그린다(`MetalPipeline.variant`). 팩 조명은 받지 않는다. 바닐라 하늘·구름·엔티티 밑 그림자만 숨긴다.
 - 측정용으로 `-Pmetalcraft.test.width=<w> -Pmetalcraft.test.height=<h>`(환경변수 `ORG_GRADLE_PROJECT_...`)로 자동 테스트의 화면 크기를 바꿀 수 있다. 기준 세트는 1920×1200이다.
 - 자동 테스트의 팩 끄기/켜기는 K 키를 원하는 팩이 될 때까지 누른다(팩이 여러 개 설치돼 있어도 동작).
-- M7에서 아직 없는 것: 엔티티 그림자, 손(게임이 팩 뒤에 자체 셰이더로 그림), 날씨·선·번개·신호기 빔·글린트·움직이는 블록용 팩 프로그램(지금은 게임 셰이더로 보이기만 함), 엔티티별 uniform(entityId, entityColor 등)과 손에 든 아이템 uniform(로그에 목록이 남는다), 팩 옵션.
+- M7에서 아직 없는 것: 엔티티 그림자, 손(게임이 팩 뒤에 자체 셰이더로 그림), 날씨·선·번개·신호기 빔·글린트·움직이는 블록용 팩 프로그램(지금은 게임 셰이더로 보이기만 함), 엔티티별 uniform(entityId, entityColor 등, 로그에 목록이 남는다), 게임 안에서 바꾸는 팩 옵션(변환할 때 포트 설정의 `options`로만 지정 가능).
+- 손에 든 아이템의 빛(`heldBlockLightValue`, `heldItemId`와 왼손용 `...2`)은 엔진이 채운다. 팩의 `item.properties`는 변환기가 `items.properties`로 옮긴다. `held_light` 장면(밤, 횃불을 든 상태)으로 확인한다.
+- 하늘 스타일을 바꾼 변환 예: `ports/complementary-unbound-sky.json`(팩 자체의 사실적인 구름 + 둥근 해·달, 출력 폴더 `shaderpacks/complementary-sky`).
+- 줌: C 키를 누르고 있는 동안 시야각이 좁아지고 휠로 배율을 바꾼다(`zoom/Zoom.kt`, `CameraMixin`, `MouseHandlerMixin`). 조작 설정에서 키를 비우면 꺼진다.
 - M6 상태(Create, 2026-11-16): Create Fly 6.0.9(`gradle.properties`의 `create_version`, `-Pmetalcraft.create=true`)가 Metal 위에서 돌고, Flywheel용 Metal 백엔드(`flywheel/MetalFlywheel.kt`, `flywheel/FlwShaders.kt`)가 등록된다(`metalcraft:metal`). Flywheel은 `com.zurrtum.create.client.flywheel`에 내장돼 있다. Flywheel의 엔진(인스턴서, 조명 저장소, uniform, 셰이더 조각)은 그대로 쓰고 OpenGL을 건드리는 부분만 바꿨다: GLSL 조각을 Flywheel 클래스로 조립해 MSL로 변환하고, 메시와 인스턴스 데이터를 Metal 버퍼에 두고 인스턴싱으로 그린다. 느슨한 uniform은 `FlwDraw` 블록, 버퍼 텍스처는 storage 버퍼로 바꾼다.
 - 변환된 쉐이더팩이 켜져 있으면 Flywheel 인스턴스는 팩의 엔티티 프로그램으로 그려진다: 변환기가 `gbuffers_entities`의 정점 템플릿(`_glsl/flywheel.vsh.glsl`, `mc_flywheel()`이 비어 있음)과 프래그먼트 GLSL을 남기고, 엔진이 실행 중에 Flywheel 정점 코드를 붙여 컴파일한다(`FlwShaders.getPackLit`, `ConvertedPack.externalWorldProgram`).
 - create 장면(축·톱니 1,536개, 1920×1200): Metal 팩 없음 약 864 FPS(Flywheel 꺼진 폴백은 100, OpenGL의 Flywheel 인스턴싱은 184), Metal + Complementary 약 170 FPS(폴백 81), Iris + Complementary 약 40 FPS(Iris는 팩이 켜지면 Flywheel이 꺼진다).
