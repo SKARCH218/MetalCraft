@@ -266,6 +266,7 @@ private class Converter(private val source: Path, private val output: Path, priv
 
         val manifest = JsonObject()
         manifest.addProperty("format", 2)
+        manifest.addProperty("primaryTarget", true)
         manifest.addProperty("name", port.get("name")?.asString ?: source.parent.name)
         manifest.add("buffers", buffers())
         manifest.add("textures", textures())
@@ -307,13 +308,18 @@ private class Converter(private val source: Path, private val output: Path, priv
         }
         // World programs share one set of attachments: the game's image, then every target any of them writes.
         val gbufferTargets = finished.filter { it.key.kind.world }.flatMap { it.value.second.targets }.toSortedSet().toList()
+        // colortex0 is the first attachment of the world passes; the other buffers they write follow it.
+        val extraTargets = gbufferTargets.filter { it != 0 }
 
         val manifestPrograms = JsonObject()
         val shadowConstants = HashMap<String, String>()
         for ((program, stages) in finished) {
             try {
                 val targets = stages.second.targets
-                val locations = if (program.kind.world) targets.map { 1 + gbufferTargets.indexOf(it) } else targets.indices.toList()
+                val locations = when {
+                    !program.kind.world -> targets.indices.toList()
+                    else -> targets.map { if (it == 0) 0 else 1 + extraTargets.indexOf(it) }
+                }
                 val linked = link(stages.first.text, stages.second.text)
                 val vertexGlsl = linked.first
                 val fragmentGlsl = linked.second.replaceFirst(
@@ -454,6 +460,7 @@ private class Converter(private val source: Path, private val output: Path, priv
         for (match in BUFFER_CLEAR.findAll(text)) {
             buffers[index(match.groupValues[1])]?.addProperty("clear", match.groupValues[2] == "true")
         }
+        buffers.getOrPut(0) { JsonObject() }
         for (buffer in buffers.values) if (!buffer.has("format")) buffer.addProperty("format", "RGBA8")
         val result = JsonObject()
         for ((index, buffer) in buffers) {

@@ -69,7 +69,19 @@ object ShaderPipeline {
      * The pack's extra colour targets, attached to passes that draw into the game image. [colorSlot] is the
      * one among them that holds the pack's picture of the world, or -1 if that is the game image itself.
      */
-    internal class Gbuffer(val mainColor: GpuTexture, val handles: LongArray, val formats: IntArray, val colorSlot: Int = -1)
+    internal class Gbuffer(
+        val mainColor: GpuTexture, val handles: LongArray, val formats: IntArray, val colorSlot: Int = -1,
+        /** With [colorSlot] == [PRIMARY]: the format of the pack image that takes the place of the game image. */
+        val primaryFormat: Int = -1,
+    ) {
+        /** With [colorSlot] == [PRIMARY]: the pack image the passes draw into instead of the game image. */
+        @JvmField var primary = 0L
+
+        companion object {
+            /** [colorSlot] of a pack whose picture of the world is the first attachment itself. */
+            const val PRIMARY = -2
+        }
+    }
 
     /** Non-null while the game draws the world with a pack active. Read by the backend for every pass. */
     @JvmField

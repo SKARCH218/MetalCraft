@@ -149,12 +149,23 @@ internal class MetalPipeline(private val device: MetalDevice, val info: RenderPi
 
         val targets = info.colorTargetStates
         val only = targets.singleOrNull()
-        val redirected = if (extraTargets != null && colorSlot in extraTargets.indices && only != null) redirectedShaders(colorSlot) else 0L
+        // The pack's image is the first attachment itself: the colour stays where it is but is made linear.
+        val primary = extraTargets != null && colorSlot == ShaderPipeline.Gbuffer.PRIMARY
+        val redirected = when {
+            extraTargets == null || only == null -> 0L
+            primary -> redirectedShaders(-1)
+            colorSlot in extraTargets.indices -> redirectedShaders(colorSlot)
+            else -> 0L
+        }
         layout.add(targets.size + (extraTargets?.size ?: 0))
-        for (target in targets) {
+        for ((index, target) in targets.withIndex()) {
             val blend = target?.blendFunction()?.orElse(null)
-            layout.add(if (target != null) MetalFormats.code(target.format()) else MetalFormats.NO_FORMAT)
-            if (redirected != 0L) {
+            if (primary && index == 0) {
+                layout.add(ShaderPipeline.gbuffer?.primaryFormat ?: MetalFormats.NO_FORMAT)
+            } else {
+                layout.add(if (target != null) MetalFormats.code(target.format()) else MetalFormats.NO_FORMAT)
+            }
+            if (redirected != 0L && !primary) {
                 // The game's image is in the pass but this pipeline now writes the pack's instead.
                 repeat(8) { layout.add(0) }
                 continue

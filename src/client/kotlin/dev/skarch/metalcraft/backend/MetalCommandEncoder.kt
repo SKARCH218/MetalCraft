@@ -173,6 +173,11 @@ internal class MetalCommandEncoder(private val device: MetalDevice) : CommandEnc
             for (i in gbuffer.handles.indices) colorHandles.setAtIndex(JAVA_LONG, 1L + i, gbuffer.handles[i])
             colorCount += gbuffer.handles.size
             extraTargets = gbuffer.formats
+            // The pack's own image stands where the game's would; the pack clears it itself.
+            if (gbuffer.primary != 0L) {
+                colorHandles.setAtIndex(JAVA_LONG, 0, gbuffer.primary)
+                clearMask = clearMask and 1.inv()
+            }
         }
 
         Mcn.check(

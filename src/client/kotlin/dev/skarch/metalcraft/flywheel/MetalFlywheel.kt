@@ -487,9 +487,13 @@ private class MetalDrawManager : DrawManager<MetalInstancer<*>>() {
                 fragment = translated.fragmentMsl
             } else {
                 // With a shader pack the pass carries the pack's buffers; the colour goes to the pack's image.
-                formats = IntArray(1 + gbuffer.formats.size) { if (it == 0) MetalFormats.code(GpuFormat.RGBA8_UNORM) else gbuffer.formats[it - 1] }
-                val redirected = if (slot >= 0) MetalPipeline.redirectColor(translated.fragmentMsl, slot) else null
-                val written = if (redirected != null) slot + 1 else 0
+                // A pack whose own image is the first attachment keeps the colour there, made linear.
+                val primary = slot == ShaderPipeline.Gbuffer.PRIMARY
+                formats = IntArray(1 + gbuffer.formats.size) {
+                    if (it > 0) gbuffer.formats[it - 1] else if (primary) gbuffer.primaryFormat else MetalFormats.code(GpuFormat.RGBA8_UNORM)
+                }
+                val redirected = if (slot >= 0 || primary) MetalPipeline.redirectColor(translated.fragmentMsl, if (primary) -1 else slot) else null
+                val written = if (redirected != null && !primary) slot + 1 else 0
                 masks = IntArray(formats.size) { if (it == written) mask else 0 }
                 blendMask = blendMask shl written
                 fragment = redirected ?: translated.fragmentMsl

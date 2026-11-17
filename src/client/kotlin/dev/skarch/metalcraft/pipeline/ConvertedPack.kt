@@ -120,9 +120,9 @@ internal class ConvertedPack(
             val entry = entries[i]
             if (entry.kind == BindingEntry.TEXTURE) BindingEntry(BindingEntry.TEXTURE, slots[textures.indexOf(entry)].entryName, null, entry.index) else entry
         }
-        val formats = IntArray(1 + spec.gbuffers.size) { if (it == 0) MetalFormats.code(GpuFormat.RGBA8_UNORM) else gbufferFormats[it - 1] }
-        val masks = IntArray(formats.size) { if (it > 0 && spec.gbuffers[it - 1] in targets) WRITE_ALL else 0 }
-        val blendMask = if (blend && 0 in targets) 1 shl (1 + spec.gbuffers.indexOf(0)) else 0
+        val formats = attachmentFormats
+        val masks = IntArray(formats.size) { if (attachments[it] in targets) WRITE_ALL else 0 }
+        val blendMask = if (blend && 0 in targets) 1 shl attachments.indexOf(0) else 0
         val compiled = PackProgram(
             device, "${pack.id}/$label", vertexMsl, fragmentMsl, bindings, format, formats, masks, blendMask, depthCompare, depthWrite,
             if (cull) 1 else 0, null, fastMath = true,
@@ -185,8 +185,21 @@ internal class ConvertedPack(
 
     private var width = 0
     private var height = 0
-    private val gbufferFormats = IntArray(spec.gbuffers.size) { MetalFormats.code(spec.buffers.getValue(spec.gbuffers[it]).format) }
-    private val gbufferHandles = LongArray(spec.gbuffers.size)
+    /**
+     * The colour attachments of the world passes, as the buffers they hold. A pack converted with
+     * `primaryTarget` has its colortex0 where the game image would be; otherwise the game image stays first
+     * (-1 here) and every buffer the world programs write follows.
+     */
+    private val attachments: IntArray = if (spec.primaryTarget) {
+        intArrayOf(0) + spec.gbuffers.filter { it != 0 }
+    } else {
+        intArrayOf(-1) + spec.gbuffers
+    }
+    private val attachmentFormats = IntArray(attachments.size) {
+        if (attachments[it] < 0) MetalFormats.code(GpuFormat.RGBA8_UNORM) else MetalFormats.code(spec.buffers.getValue(attachments[it]).format)
+    }
+    private val gbufferFormats = attachmentFormats.copyOfRange(1, attachmentFormats.size)
+    private val gbufferHandles = LongArray(attachments.size - 1)
     private var gbufferState: ShaderPipeline.Gbuffer? = null
 
     // Per-frame state.
@@ -271,6 +284,9 @@ internal class ConvertedPack(
             for ((name, image) in spec.images) images[name] = loadImage(image)
             // Packs that bring no noise image get random noise, as they would from an OpenGL shader loader.
             if ("noisetex" !in images) images["noisetex"] = defaultNoise()
+            // The game has no normal or specular maps for its textures: flat, and nothing shiny.
+            if ("normals" !in images) images["normals"] = flatImage("normals", 128, 128, 255, 255)
+            if ("specular" !in images) images["specular"] = flatImage("specular", 0, 0, 0, 0)
             val header = ShaderPipeline.engineSource("pack_header.metal") + "\n"
             depthCopy = register(
                 PackProgram(
@@ -315,6 +331,22 @@ internal class ConvertedPack(
             buffer.slice()
         } finally {
             MemoryUtil.memFree(bytes)
+        }
+    }
+
+    /** A one-pixel image of a single colour. */
+    private fun flatImage(name: String, r: Int, g: Int, b: Int, alpha: Int): Image {
+        val pixel = MemoryUtil.memAlloc(4)
+        val texture = device.createTexture(name, GpuTexture.USAGE_TEXTURE_BINDING or GpuTexture.USAGE_COPY_DST, GpuFormat.RGBA8_UNORM, 1, 1, 1, 1) as MetalTexture
+        try {
+            pixel.put(0, r.toByte()).put(1, g.toByte()).put(2, b.toByte()).put(3, alpha.toByte())
+            device.encoder.writeToTexture(texture, pixel, 0, 0, 0, 0, 1, 1)
+            return Image(texture, device.createTextureView(texture) as MetalTextureView, true)
+        } catch (e: Exception) {
+            texture.close()
+            throw e
+        } finally {
+            MemoryUtil.memFree(pixel)
         }
     }
 
@@ -409,10 +441,10 @@ internal class ConvertedPack(
         cull: Boolean, depthCompare: Int, depthWrite: Boolean, blendTargets: IntArray, blendFunction: IntArray?,
     ): Program {
         val slots = slots(program, "gbuffers")
-        val formats = IntArray(1 + spec.gbuffers.size) { if (it == 0) MetalFormats.code(GpuFormat.RGBA8_UNORM) else gbufferFormats[it - 1] }
-        val masks = IntArray(formats.size) { if (it > 0 && spec.gbuffers[it - 1] in program.targets) WRITE_ALL else 0 }
+        val formats = attachmentFormats
+        val masks = IntArray(formats.size) { if (attachments[it] in program.targets) WRITE_ALL else 0 }
         var blend = 0
-        for (target in blendTargets) if (target in program.targets) blend = blend or (1 shl (1 + spec.gbuffers.indexOf(target)))
+        for (target in blendTargets) if (target in program.targets) blend = blend or (1 shl attachments.indexOf(target))
         val buffers = if (withGlobals) {
             entries(slots, PACK_UNIFORMS_ENTRY, DRAW_UNIFORMS_ENTRY, geometryBlock, GLOBALS_ENTRY)
         } else {
@@ -517,10 +549,21 @@ internal class ConvertedPack(
 
     /** The pack's buffers the world programs write, for passes that draw into [mainColor]. */
     fun gbuffer(mainColor: GpuTexture): ShaderPipeline.Gbuffer {
-        for (i in gbufferHandles.indices) gbufferHandles[i] = color(spec.gbuffers[i]).view!!.handle
+        for (i in gbufferHandles.indices) gbufferHandles[i] = color(attachments[i + 1]).view!!.handle
+        val primary = if (spec.primaryTarget) color(0).view!!.handle else 0L
         val existing = gbufferState
-        if (existing != null && existing.mainColor === mainColor) return existing
-        return ShaderPipeline.Gbuffer(mainColor, gbufferHandles, gbufferFormats, spec.gbuffers.indexOf(0)).also { gbufferState = it }
+        if (existing != null && existing.mainColor === mainColor) {
+            existing.primary = primary
+            return existing
+        }
+        val created = if (spec.primaryTarget) {
+            ShaderPipeline.Gbuffer(mainColor, gbufferHandles, gbufferFormats, ShaderPipeline.Gbuffer.PRIMARY, attachmentFormats[0])
+        } else {
+            ShaderPipeline.Gbuffer(mainColor, gbufferHandles, gbufferFormats, spec.gbuffers.indexOf(0))
+        }
+        created.primary = primary
+        gbufferState = created
+        return created
     }
 
     /** The pack's program for a game pipeline, or null when the pack has none (the game's own shader then draws). */

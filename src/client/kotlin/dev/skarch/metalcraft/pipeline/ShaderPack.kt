@@ -206,6 +206,8 @@ internal class ConvertedSpec(json: JsonObject, dimension: String) {
         index to Buffer(index, format(buffer.get("format").asString), buffer.get("clear")?.asBoolean ?: true, buffer.get("scale")?.asFloat ?: 1f)
     }
     val gbuffers: IntArray = part.getAsJsonArray("gbuffers").map { it.asInt }.toIntArray()
+    /** The pack's colortex0 is the first attachment of the world passes, in place of the game image. */
+    val primaryTarget: Boolean = json.get("primaryTarget")?.asBoolean ?: false
     val shadowResolution: Int = part.getAsJsonObject("shadow").get("resolution").asInt
     val shadowDistance: Float = part.getAsJsonObject("shadow").get("distance").asFloat
     val sunPathRotation: Float = part.getAsJsonObject("shadow").get("sunPathRotation").asFloat
@@ -252,7 +254,8 @@ internal class ConvertedSpec(json: JsonObject, dimension: String) {
         require(shadowResolution in 256..8192) { "Shadow resolution $shadowResolution is outside 256..8192" }
         require(shadowDistance >= 8f && shadowDistance <= 1024f) { "Shadow distance $shadowDistance is outside 8..1024" }
         require(uniformBlockSize in 16..65536) { "Uniform block size $uniformBlockSize is not plausible" }
-        require(gbuffers.size <= 7) { "At most 7 buffers can be written by the world programs" }
+        val extra = if (primaryTarget) gbuffers.count { it != 0 } else gbuffers.size
+        require(extra <= 7) { "The world programs write more buffers than a pass can hold (8 with the first)" }
         for (index in gbuffers) require(index in buffers) { "World programs write colortex$index, which is not declared" }
     }
 
