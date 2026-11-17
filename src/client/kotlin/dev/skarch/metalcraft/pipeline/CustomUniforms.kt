@@ -127,7 +127,7 @@ internal class CustomUniforms(
     }
 
     /** A member of the uniform block, read back as the engine wrote it this frame. */
-    private inner class BlockValue(private val offset: Int, private val type: String) : Node() {
+    private inner class BlockValue(val offset: Int, val type: String) : Node() {
         init {
             size = when (type) { "vec2", "ivec2" -> 2; "vec3", "ivec3" -> 3; "vec4" -> 4; else -> 1 }
         }
@@ -139,6 +139,13 @@ internal class CustomUniforms(
             } else {
                 for (i in 0 until size) out[i] = data.getFloat(offset + i * 4)
             }
+        }
+    }
+
+    /** One element of a matrix in the block: `name.column.row`. */
+    private inner class MatrixElement(private val offset: Int) : Node() {
+        override fun eval(frameTime: Float) {
+            out[0] = block?.getFloat(offset) ?: 0f
         }
     }
 
@@ -377,6 +384,16 @@ internal class CustomUniforms(
             var node = primary()
             // .x .y .z .w and .r .g .b .a pick one component.
             while (take(".")) {
+                // matrix.column.row
+                if (node is BlockValue && node.type.startsWith("mat") && text.getOrElse(at) { ' ' }.isDigit()) {
+                    val column = text[at] - '0'
+                    require(text.getOrElse(at + 1) { ' ' } == '.' && text.getOrElse(at + 2) { ' ' }.isDigit()) { "expected matrix.column.row" }
+                    val row = text[at + 2] - '0'
+                    at += 3
+                    // Columns of a mat4 are 16 bytes apart; a mat3's columns are padded to the same.
+                    node = MatrixElement(node.offset + column * 16 + row * 4)
+                    continue
+                }
                 val index = "xyzwrgba".indexOf(text.getOrElse(at) { ' ' })
                 require(index >= 0) { "unknown component at ${text.substring(at)}" }
                 at++

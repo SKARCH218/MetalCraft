@@ -82,6 +82,11 @@ private val OPTION_LINE = Regex("""^(\s*#define\s+(\w+)\s+)(\S+)(\s*//\s*\[.*)$"
 private val INTERFACE_LINE = Regex(
     """^\s*((?:(?:flat|smooth|noperspective|centroid|invariant)\s+)*)(in|out)\s+((?:(?:flat|smooth|noperspective|centroid|highp|mediump|lowp)\s+)*)(\w+)\s+([^;(){}=]+);\s*$""",
 )
+private val CONSTANT_LINE = Regex("""(?m)^\s*const\s+\w+\s+(\w+)\s*=""")
+private val MATRIX_TYPE = Regex("""d?mat(\d)(?:x\d)?""")
+
+/** A fragment output a pack declares itself instead of writing gl_FragData. */
+private val PACK_OUTPUT = Regex("""(?m)^[ \t]*layout\s*\(\s*location\s*=\s*(\d+)\s*\)\s*out\s+(\w+)\s+(\w+)\s*;""")
 private val INCLUDE_LINE = Regex("""^\s*#include\s+"([^"]+)"""")
 private val PACK_ATTRIBUTE = Regex("""^\s*(attribute|in)\s+vec[234]\s+(mc_Entity|mc_midTexCoord|at_tangent|at_midBlock)\s*;.*$""")
 private val TARGETS_COMMENT = Regex("""/\*\s*(DRAWBUFFERS|RENDERTARGETS)\s*:\s*([0-9,\s]+?)\s*\*/""")
@@ -111,6 +116,10 @@ private val STANDARD_UNIFORMS = mapOf(
     "skyColor" to "vec3", "fogColor" to "vec3", "fogStart" to "float", "fogEnd" to "float", "centerDepthSmooth" to "float",
     "heldItemId" to "int", "heldItemId2" to "int", "heldBlockLightValue" to "int", "heldBlockLightValue2" to "int",
     "hideGUI" to "bool", "renderStage" to "int", "constantMood" to "float", "thunderStrength" to "float",
+    "gbufferModelView" to "mat4", "gbufferModelViewInverse" to "mat4", "gbufferProjection" to "mat4",
+    "gbufferProjectionInverse" to "mat4", "gbufferPreviousModelView" to "mat4", "gbufferPreviousProjection" to "mat4",
+    "shadowModelView" to "mat4", "shadowModelViewInverse" to "mat4", "shadowProjection" to "mat4",
+    "shadowProjectionInverse" to "mat4",
 )
 
 /** What stands in for a program a pack leaves out, most specific first (the order shader loaders use). */
@@ -322,9 +331,13 @@ private class Converter(private val source: Path, private val output: Path, priv
                 }
                 val linked = link(stages.first.text, stages.second.text)
                 val vertexGlsl = linked.first
-                val fragmentGlsl = linked.second.replaceFirst(
-                    "#version 450\n", "#version 450\n" + locations.withIndex().joinToString("") { (i, location) -> "layout(location = $location) out vec4 mc_FragData_$i;\n" },
+                val own = stages.second.ownOutputs
+                var fragmentGlsl = linked.second.replaceFirst(
+                    "#version 450\n",
+                    "#version 450\n" + locations.withIndex().filter { it.index !in own }
+                        .joinToString("") { (i, location) -> "layout(location = $location) out vec4 mc_FragData_$i;\n" },
                 )
+                for (index in own.keys) fragmentGlsl = fragmentGlsl.replace("MC_LOCATION_$index)", "${locations[index]})")
                 for (match in SHADOW_CONSTANT.findAll(fragmentGlsl)) shadowConstants.putIfAbsent(match.groupValues[1], match.groupValues[2])
                 Files.writeString(debug.resolve("${program.name}.vsh.glsl"), vertexGlsl)
                 Files.writeString(debug.resolve("${program.name}.fsh.glsl"), fragmentGlsl)
@@ -648,21 +661,23 @@ private class Converter(private val source: Path, private val output: Path, priv
      * The uniform block as [program] sees it. Every program gets the same layout, but members the program
      * did not declare are given other names: the program may use those names for something of its own.
      */
-    private fun blockFor(program: Program, uniforms: UniformLayout): String {
+    private fun blockFor(program: Program, uniforms: UniformLayout, constants: Set<String> = emptySet()): String {
         val glsl = StringBuilder("layout(std140) uniform $UNIFORM_BLOCK {\n")
         for (member in uniforms.members) {
-            val own = member.name in program.uniformNames || member.name in PRELUDE_UNIFORMS || ENGINE_UNIFORMS.any { it.second == member.name }
+            val own = member.name !in constants &&
+                (member.name in program.uniformNames || member.name in PRELUDE_UNIFORMS || ENGINE_UNIFORMS.any { it.second == member.name })
             glsl.append("    ").append(member.type).append(' ').append(if (own) member.name else "mc_other_${member.name}").append(";\n")
         }
         return glsl.append("};\n").toString()
     }
 
-    private class Finished(val text: String, val targets: List<Int>)
+    /** [ownOutputs]: draw buffer index to type and name, for outputs the pack declares with a layout itself. */
+    private class Finished(val text: String, val targets: List<Int>, val ownOutputs: Map<Int, Pair<String, String>> = emptyMap())
 
     /** Adds the prelude, runs the preprocessor and declares what the old built-ins stood for. */
-    private fun finish(program: Program, stage: Stage, body: String, uniforms: UniformLayout): Finished {
+    private fun finish(program: Program, stage: Stage, body: String, uniforms: UniformLayout, constants: Set<String> = emptySet()): Finished {
         val prelude = StringBuilder()
-        prelude.append("#version 450\n").append(STANDARD_MACROS).append(blockFor(program, uniforms)).append(COMMON_PRELUDE)
+        prelude.append("#version 450\n").append(STANDARD_MACROS).append(blockFor(program, uniforms, constants)).append(COMMON_PRELUDE)
         // GLSL 1.20 spelling, still used by older packs.
         prelude.append(if (stage == Stage.VERTEX) "#define varying out\n" else "#define varying in\n#define gl_FragColor gl_FragData[0]\n")
         if (stage == Stage.FRAGMENT) prelude.append(FRAGMENT_TEXTURE_FUNCTIONS)
@@ -693,6 +708,12 @@ private class Converter(private val source: Path, private val output: Path, priv
             else -> ""
         } + "}\n"
         var text = preprocess("${program.name}.${stage.extension}", prelude.toString() + body + epilogue, stage)
+        // A name can be a uniform under one pack option and a constant under another. Where the constant is
+        // what survived the preprocessor, the uniform gives up the name.
+        if (constants.isEmpty()) {
+            val clashing = CONSTANT_LINE.findAll(text).map { it.groupValues[1] }.filter { it in program.uniformNames }.toSet()
+            if (clashing.isNotEmpty()) return finish(program, stage, body, uniforms, clashing)
+        }
 
         var targets = listOf(0)
         if (stage == Stage.FRAGMENT) {
@@ -704,6 +725,41 @@ private class Converter(private val source: Path, private val output: Path, priv
                 throw ConvertException("writes gl_FragData[${used.last()}] but declares only ${targets.size} targets")
             }
             text = FRAG_DATA.replace(text) { "mc_FragData_${it.groupValues[1]}" }
+            // Outputs the pack declares itself keep their names; their locations are filled in once the
+            // attachments are known.
+            val own = LinkedHashMap<Int, Pair<String, String>>()
+            val widened = StringBuilder()
+            text = PACK_OUTPUT.replace(text) {
+                val index = it.groupValues[1].toInt()
+                val type = it.groupValues[2]
+                val name = it.groupValues[3]
+                own[index] = type to name
+                // Metal wants an output as wide as its attachment: narrower ones are filled up at the end.
+                val fill = when (type) { "float" -> ", 0.0, 0.0, 1.0"; "vec2" -> ", 0.0, 1.0"; "vec3" -> ", 1.0"; else -> null }
+                if (fill == null) {
+                    "layout(location = MC_LOCATION_$index) out $type $name;"
+                } else {
+                    widened.append("    mc_Out_$index = vec4($name$fill);\n")
+                    "layout(location = MC_LOCATION_$index) out vec4 mc_Out_$index; $type $name;"
+                }
+            }
+            if (widened.isNotEmpty()) {
+                val end = text.lastIndexOf('}')
+                text = text.substring(0, end) + widened + text.substring(end)
+            }
+            if (own.isNotEmpty()) {
+                // Without a directive the outputs go to the buffers of the same numbers.
+                if (markers.isEmpty()) targets = (0..own.keys.max()).toList()
+                if (own.keys.max() >= targets.size) throw ConvertException("declares output ${own.keys.max()} but only ${targets.size} targets")
+                // The alpha test reads the first output, whatever the pack calls it.
+                val first = own[0]
+                text = when {
+                    first == null -> text
+                    first.first == "vec4" -> text.replace("mc_FragData_0", first.second)
+                    else -> text.replace(Regex("""[ \t]*if \(!\(mc_FragData_0\.a > mc_alphaTestRef\)\) discard;\n"""), "")
+                }
+            }
+            return Finished(text, targets, own)
         }
         return Finished(text, targets)
     }
@@ -733,7 +789,8 @@ private class Converter(private val source: Path, private val output: Path, priv
                     } else {
                         1
                     }
-                    val slots = count * when (type) { "mat2" -> 2; "mat3" -> 3; "mat4" -> 4; else -> 1 }
+                    // A matrix takes one location per column: mat3, mat2x2, mat4x3 ...
+                    val slots = count * (MATRIX_TYPE.matchEntire(type)?.groupValues?.get(1)?.toInt() ?: 1)
                     val location = locations.getOrPut(name) { next.also { next += slots } }
                     result.append("layout(location = ").append(location).append(") ")
                     if (qualifiers.isNotEmpty()) result.append(qualifiers).append(' ')
