@@ -117,6 +117,22 @@ tasks.register<JavaExec>("convertShaderPack") {
     )
 }
 
+// The converter as a program of its own: java -jar build/libs/metalcraft-porter.jar <pack zip or folder> [output] [port json]
+// It carries the libraries it needs (shaderc and SPIRV-Cross from LWJGL with their macOS binaries, Gson, Kotlin).
+tasks.register<Jar>("porterJar") {
+    group = "metalcraft"
+    description = "Builds the shader pack converter as a runnable jar."
+    archiveFileName.set("metalcraft-porter.jar")
+    destinationDirectory.set(layout.buildDirectory.dir("libs"))
+    manifest { attributes("Main-Class" to "dev.skarch.metalcraft.tools.ShaderPackConverterKt") }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from(tools.output)
+    val needed = Regex("""^(lwjgl-\d|lwjgl-shaderc-|lwjgl-spvc-|gson-|kotlin-stdlib-).*\.jar$""")
+    from({ tools.runtimeClasspath.files.filter { needed.containsMatchIn(it.name) }.map { zipTree(it) } }) {
+        exclude("META-INF/*.SF", "META-INF/*.RSA", "META-INF/*.DSA", "module-info.class")
+    }
+}
+
 val nativeDir = layout.projectDirectory.dir("native")
 
 val buildNative by tasks.registering(Exec::class) {

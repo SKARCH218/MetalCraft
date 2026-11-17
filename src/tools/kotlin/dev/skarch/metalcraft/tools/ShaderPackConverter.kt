@@ -79,18 +79,44 @@ private val STD140 = mapOf(
 
 private val UNIFORM_LINE = Regex("""^\s*uniform\s+(bool|int|float|i?vec[234]|mat[34])\s+([^;]+);.*$""")
 private val OPTION_LINE = Regex("""^(\s*#define\s+(\w+)\s+)(\S+)(\s*//\s*\[.*)$""")
+private val INTERFACE_LINE = Regex(
+    """^\s*((?:(?:flat|smooth|noperspective|centroid|invariant)\s+)*)(in|out)\s+((?:(?:flat|smooth|noperspective|centroid|highp|mediump|lowp)\s+)*)(\w+)\s+([^;(){}=]+);\s*$""",
+)
 private val INCLUDE_LINE = Regex("""^\s*#include\s+"([^"]+)"""")
 private val PACK_ATTRIBUTE = Regex("""^\s*(attribute|in)\s+vec[234]\s+(mc_Entity|mc_midTexCoord|at_tangent|at_midBlock)\s*;.*$""")
 private val TARGETS_COMMENT = Regex("""/\*\s*(DRAWBUFFERS|RENDERTARGETS)\s*:\s*([0-9,\s]+?)\s*\*/""")
 private val TARGETS_MARKER = Regex("""const int mc_targets((?:_\d+)+) = 0;""")
 private val FRAG_DATA = Regex("""gl_FragData\s*\[\s*(\d+)\s*]""")
 
-private val BUFFER_FORMAT = Regex("""const\s+int\s+colortex(\d+)Format\s*=\s*(\w+)\s*;""")
-private val BUFFER_CLEAR = Regex("""const\s+bool\s+colortex(\d+)Clear\s*=\s*(true|false)\s*;""")
+private const val BUFFER_NAME = """(colortex\d+|gcolor|gdepth|gnormal|composite|gaux[1-4])"""
+private val BUFFER_FORMAT = Regex("""const\s+int\s+${BUFFER_NAME}Format\s*=\s*(\w+)\s*;""")
+private val BUFFER_CLEAR = Regex("""const\s+bool\s+${BUFFER_NAME}Clear\s*=\s*(true|false)\s*;""")
+private val BUFFER_USE = Regex("""uniform\s+sampler2D\s+$BUFFER_NAME\s*;""")
+private val DRAW_BUFFERS = Regex("""DRAWBUFFERS:\s*([0-7]+)""")
+private val RENDER_TARGETS = Regex("""RENDERTARGETS:\s*([0-9, ]+)""")
+private val SHADER_FILE = Regex("""\.(glsl|fsh|vsh|csh|gsh|inc)$""")
+
+/** What stands in for a program a pack leaves out, most specific first (the order shader loaders use). */
+private val FALLBACKS = linkedMapOf(
+    "gbuffers_textured" to listOf("gbuffers_basic"),
+    "gbuffers_terrain" to listOf("gbuffers_textured_lit", "gbuffers_textured", "gbuffers_basic"),
+    "gbuffers_water" to listOf("gbuffers_terrain", "gbuffers_textured_lit", "gbuffers_textured", "gbuffers_basic"),
+    "gbuffers_entities" to listOf("gbuffers_textured_lit", "gbuffers_textured", "gbuffers_basic"),
+    "gbuffers_skytextured" to listOf("gbuffers_textured", "gbuffers_basic"),
+    "gbuffers_skybasic" to listOf("gbuffers_basic"),
+)
+
+/** The names colour buffers 0 to 7 had before they were called colortex. */
+private val LEGACY_BUFFERS = mapOf(
+    "gcolor" to 0, "gdepth" to 1, "gnormal" to 2, "composite" to 3, "gaux1" to 4, "gaux2" to 5, "gaux3" to 6, "gaux4" to 7,
+)
 private val SHADOW_CONSTANT = Regex("""const\s+(?:int|float)\s+(shadowMapResolution|shadowDistance|sunPathRotation)\s*=\s*(-?[0-9.]+)\s*;""")
 
 /** Members the engine needs in the block besides the pack's own uniforms. */
 private val ENGINE_UNIFORMS = listOf("vec4" to "mc_fog", "mat4" to "mc_bob")
+
+/** Uniforms the converter's own code refers to. They are in every pack's block, declared by the pack or not. */
+private val PRELUDE_UNIFORMS = listOf("gbufferModelView", "gbufferProjection", "shadowModelView", "shadowProjection")
 
 private const val UNIFORM_BLOCK = "PackUniforms"
 private const val SKY_PROGRAM = "gbuffers_skybasic"
@@ -103,18 +129,60 @@ private val DIMENSION_FOLDERS = listOf("world0", "world-1", "world1")
 private const val MC_VERSION = 12111
 private val VERSION_CONDITION = Regex("""#if\s+MC_VERSION\s*(>=|>|<=|<|==)\s*(\d+)""")
 
+/**
+ * `<pack> [output folder] [port settings json]`. The pack is a shader pack zip, its unpacked folder or the
+ * `shaders` folder inside it. Without an output folder the result goes to `shaderpacks/<pack name>`.
+ */
 fun main(args: Array<String>) {
-    if (args.size < 2 || args[0].isEmpty() || args[1].isEmpty()) {
-        System.err.println("usage: convertShaderPack -Ppack.source=<pack>/shaders -Ppack.output=<folder> -Ppack.port=<port settings json>")
+    if (args.isEmpty() || args[0].isEmpty()) {
+        System.err.println("usage: <pack zip or folder> [output folder] [port settings json]")
         exitProcess(2)
     }
+    val given = Path.of(args[0]).toAbsolutePath().normalize()
+    if (!given.exists()) {
+        System.err.println("$given does not exist")
+        exitProcess(2)
+    }
+    val source = shadersFolder(if (given.isRegularFile()) unzip(given) else given)
+    if (source == null) {
+        System.err.println("No shaders folder found in $given")
+        exitProcess(2)
+    }
+    val packName = given.name.removeSuffix(".zip").lowercase().replace(Regex("§.|[^a-z0-9]+"), "-").trim('-').ifEmpty { "pack" }
+    val output = args.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { Path.of(it) } ?: Path.of("shaderpacks", packName)
     val port = args.getOrNull(2)?.takeIf { it.isNotBlank() }?.let { JsonParser.parseString(Files.readString(Path.of(it))).asJsonObject } ?: JsonObject()
-    val converter = Converter(Path.of(args[0]).toAbsolutePath().normalize(), Path.of(args[1]).toAbsolutePath().normalize(), port)
+    println("Converting $source -> ${output.toAbsolutePath().normalize()}")
+    val converter = Converter(source, output.toAbsolutePath().normalize(), port)
     exitProcess(if (converter.run()) 0 else 1)
+}
+
+/** The folder that holds the programs: the path itself, or a `shaders` folder up to two levels below it. */
+private fun shadersFolder(root: Path): Path? {
+    if (root.name == "shaders") return root
+    return Files.walk(root, 3).use { paths -> paths.filter { Files.isDirectory(it) && it.name == "shaders" }.findFirst().orElse(null) }
+}
+
+private fun unzip(zip: Path): Path {
+    val target = Files.createTempDirectory("metalcraft-pack")
+    java.util.zip.ZipFile(zip.toFile()).use { file ->
+        for (entry in file.entries()) {
+            val path = target.resolve(entry.name).normalize()
+            if (!path.startsWith(target)) continue
+            if (entry.isDirectory) {
+                Files.createDirectories(path)
+            } else {
+                Files.createDirectories(path.parent)
+                file.getInputStream(entry).use { Files.copy(it, path) }
+            }
+        }
+    }
+    return target
 }
 
 private class Converter(private val source: Path, private val output: Path, private val port: JsonObject) {
     private val uniformTypes = LinkedHashMap<String, String>()
+    /** The uniforms the program being assembled declares itself. */
+    private var assembling = HashSet<String>()
     private val compiler = Shaderc.shaderc_compiler_initialize()
     private val options = Shaderc.shaderc_compile_options_initialize()
 
@@ -133,15 +201,27 @@ private class Converter(private val source: Path, private val output: Path, priv
         val dimensions = LinkedHashMap<String, List<Program>>()
         val skipped = sortedSetOf<String>()
         for (folder in DIMENSION_FOLDERS) {
+            // A dimension's programs come from its folder; what is missing there is taken from the pack's root.
             val dimension = source.resolve(folder)
-            if (!dimension.exists()) continue
-            val names = Files.list(dimension).use { files ->
-                files.filter { it.isRegularFile() && it.name.endsWith(".fsh") }.map { it.name.removeSuffix(".fsh") }.sorted().toList()
-            }
+            val names = (programNames(dimension) + programNames(source)).toSortedSet()
+            if (names.isEmpty()) continue
             val programs = ArrayList<Program>()
-            for (name in names) {
+            // A program the pack does not have is stood in for by a more general one of its own.
+            val files = LinkedHashMap<String, String>()
+            for (name in names) files[name] = name
+            for ((name, fallbacks) in FALLBACKS) {
+                if (name !in files) fallbacks.firstOrNull { it in names }?.let { files[name] = it }
+            }
+            for ((name, file) in files) {
                 val kind = kindOf(name)
-                if (kind == null) skipped.add(name) else programs.add(Program(name, kind, assemble(dimension, name, Stage.VERTEX), assemble(dimension, name, Stage.FRAGMENT)))
+                if (kind == null) {
+                    skipped.add(name)
+                } else {
+                    assembling = HashSet()
+                    val vertex = assemble(dimension, file, Stage.VERTEX)
+                    val fragment = assemble(dimension, file, Stage.FRAGMENT)
+                    programs.add(Program(name, kind, vertex, fragment, assembling))
+                }
             }
             dimensions[folder] = programs
         }
@@ -209,8 +289,9 @@ private class Converter(private val source: Path, private val output: Path, priv
             try {
                 val targets = stages.second.targets
                 val locations = if (program.kind.world) targets.map { 1 + gbufferTargets.indexOf(it) } else targets.indices.toList()
-                val vertexGlsl = stages.first.text
-                val fragmentGlsl = stages.second.text.replaceFirst(
+                val linked = link(stages.first.text, stages.second.text)
+                val vertexGlsl = linked.first
+                val fragmentGlsl = linked.second.replaceFirst(
                     "#version 450\n", "#version 450\n" + locations.withIndex().joinToString("") { (i, location) -> "layout(location = $location) out vec4 mc_FragData_$i;\n" },
                 )
                 for (match in SHADOW_CONSTANT.findAll(fragmentGlsl)) shadowConstants.putIfAbsent(match.groupValues[1], match.groupValues[2])
@@ -269,7 +350,7 @@ private class Converter(private val source: Path, private val output: Path, priv
         val entities = programs.firstOrNull { it.name == FLYWHEEL_SOURCE }
         if (entities != null && manifestPrograms.has(FLYWHEEL_SOURCE)) {
             try {
-                val template = finish(Program("flywheel", Kind.FLYWHEEL, entities.vertex, entities.fragment), Stage.VERTEX, entities.vertex, uniforms)
+                val template = finish(Program("flywheel", Kind.FLYWHEEL, entities.vertex, entities.fragment, entities.uniformNames), Stage.VERTEX, entities.vertex, uniforms)
                 Files.writeString(debug.resolve("flywheel.vsh.glsl"), template.text)
                 manifest.add("flywheel", JsonObject().also {
                     it.addProperty("program", FLYWHEEL_SOURCE)
@@ -285,6 +366,13 @@ private class Converter(private val source: Path, private val output: Path, priv
         return manifest to failures
     }
 
+    private fun programNames(folder: Path): List<String> {
+        if (!Files.isDirectory(folder)) return emptyList()
+        return Files.list(folder).use { files ->
+            files.filter { it.isRegularFile() && it.name.endsWith(".fsh") }.map { it.name.removeSuffix(".fsh") }.toList()
+        }
+    }
+
     private fun report(program: Program, error: ConvertException) {
         println("FAILED  ${program.name}\n${error.message!!.lines().take(12).joinToString("\n") { "          $it" }}")
     }
@@ -297,16 +385,24 @@ private class Converter(private val source: Path, private val output: Path, priv
 
     /** The colour buffers the pack declares in comments and constants (Iris reads them the same way). */
     private fun buffers(): JsonObject {
-        val text = Files.walk(source.resolve("lib")).use { files ->
-            files.filter { it.isRegularFile() && it.name.endsWith(".glsl") }.sorted().map { Files.readString(it) }.toList().joinToString("\n")
+        val text = Files.walk(source).use { files ->
+            files.filter { it.isRegularFile() && SHADER_FILE.containsMatchIn(it.name) }.sorted().map { Files.readString(it) }.toList().joinToString("\n")
         }
         val buffers = sortedMapOf<Int, JsonObject>()
+        fun index(name: String): Int = LEGACY_BUFFERS[name] ?: name.removePrefix("colortex").toInt()
+        // Every buffer a program reads or writes exists, declared or not. Undeclared ones are RGBA8 and cleared.
+        for (match in BUFFER_USE.findAll(text)) buffers.getOrPut(index(match.groupValues[1])) { JsonObject() }
+        for (match in DRAW_BUFFERS.findAll(text)) for (digit in match.groupValues[1]) buffers.getOrPut(digit - '0') { JsonObject() }
+        for (match in RENDER_TARGETS.findAll(text)) {
+            for (target in match.groupValues[1].split(',')) target.trim().toIntOrNull()?.let { buffers.getOrPut(it) { JsonObject() } }
+        }
         for (match in BUFFER_FORMAT.findAll(text)) {
-            buffers.getOrPut(match.groupValues[1].toInt()) { JsonObject() }.addProperty("format", match.groupValues[2])
+            buffers.getOrPut(index(match.groupValues[1])) { JsonObject() }.addProperty("format", match.groupValues[2])
         }
         for (match in BUFFER_CLEAR.findAll(text)) {
-            buffers[match.groupValues[1].toInt()]?.addProperty("clear", match.groupValues[2] == "true")
+            buffers[index(match.groupValues[1])]?.addProperty("clear", match.groupValues[2] == "true")
         }
+        for (buffer in buffers.values) if (!buffer.has("format")) buffer.addProperty("format", "RGBA8")
         val result = JsonObject()
         for ((index, buffer) in buffers) {
             if (index > 15) continue
@@ -374,7 +470,7 @@ private class Converter(private val source: Path, private val output: Path, priv
         return result
     }
 
-    private class Program(val name: String, val kind: Kind, val vertex: String, val fragment: String)
+    private class Program(val name: String, val kind: Kind, val vertex: String, val fragment: String, val uniformNames: Set<String>)
 
     private fun kindOf(program: String): Kind? = when {
         program == "shadow" -> Kind.SHADOW
@@ -392,7 +488,7 @@ private class Converter(private val source: Path, private val output: Path, priv
 
     /** The stage's source with its includes inlined, the pack's plain uniforms collected and taken out. */
     private fun assemble(dimension: Path, program: String, stage: Stage): String {
-        val file = dimension.resolve("$program.${stage.extension}")
+        val file = dimension.resolve("$program.${stage.extension}").takeIf { it.exists() } ?: source.resolve("$program.${stage.extension}")
         if (!file.exists()) throw ConvertException("$file does not exist")
         val text = StringBuilder()
         inline(file, text, 0)
@@ -407,6 +503,7 @@ private class Converter(private val source: Path, private val output: Path, priv
                     if (uniform != null) {
                         for (declarator in splitTopLevel(uniform.groupValues[2])) {
                             val name = declarator.substringBefore('=').trim()
+                            assembling.add(name)
                             val previous = uniformTypes.put(name, uniform.groupValues[1])
                             if (previous != null && previous != uniform.groupValues[1]) {
                                 throw ConvertException("uniform $name is declared as $previous and as ${uniform.groupValues[1]}")
@@ -476,6 +573,7 @@ private class Converter(private val source: Path, private val output: Path, priv
         val members = ArrayList<Uniform>()
         var offset = 0
         val glsl = StringBuilder("layout(std140) uniform $UNIFORM_BLOCK {\n")
+        for (name in PRELUDE_UNIFORMS) uniformTypes.putIfAbsent(name, "mat4")
         for ((type, name) in ENGINE_UNIFORMS + uniformTypes.map { it.value to it.key }) {
             val (size, alignment) = STD140[type] ?: throw ConvertException("uniform $name has unsupported type $type")
             offset = (offset + alignment - 1) / alignment * alignment
@@ -487,12 +585,28 @@ private class Converter(private val source: Path, private val output: Path, priv
         return UniformLayout(members, (offset + 15) / 16 * 16, glsl.toString())
     }
 
+    /**
+     * The uniform block as [program] sees it. Every program gets the same layout, but members the program
+     * did not declare are given other names: the program may use those names for something of its own.
+     */
+    private fun blockFor(program: Program, uniforms: UniformLayout): String {
+        val glsl = StringBuilder("layout(std140) uniform $UNIFORM_BLOCK {\n")
+        for (member in uniforms.members) {
+            val own = member.name in program.uniformNames || member.name in PRELUDE_UNIFORMS || ENGINE_UNIFORMS.any { it.second == member.name }
+            glsl.append("    ").append(member.type).append(' ').append(if (own) member.name else "mc_other_${member.name}").append(";\n")
+        }
+        return glsl.append("};\n").toString()
+    }
+
     private class Finished(val text: String, val targets: List<Int>)
 
     /** Adds the prelude, runs the preprocessor and declares what the old built-ins stood for. */
     private fun finish(program: Program, stage: Stage, body: String, uniforms: UniformLayout): Finished {
         val prelude = StringBuilder()
-        prelude.append("#version 450\n").append(STANDARD_MACROS).append(uniforms.glsl).append(COMMON_PRELUDE)
+        prelude.append("#version 450\n").append(STANDARD_MACROS).append(blockFor(program, uniforms)).append(COMMON_PRELUDE)
+        // GLSL 1.20 spelling, still used by older packs.
+        prelude.append(if (stage == Stage.VERTEX) "#define varying out\n" else "#define varying in\n#define gl_FragColor gl_FragData[0]\n")
+        if (stage == Stage.FRAGMENT) prelude.append(FRAGMENT_TEXTURE_FUNCTIONS)
         if (stage == Stage.VERTEX) {
             prelude.append(
                 when (program.kind) {
@@ -535,9 +649,48 @@ private class Converter(private val source: Path, private val output: Path, priv
         return Finished(text, targets)
     }
 
+    /**
+     * Gives what the vertex stage hands to the fragment stage explicit locations by name. OpenGL matches them
+     * by name; left alone they would be numbered in the order each stage happens to declare them.
+     */
+    private fun link(vertex: String, fragment: String): Pair<String, String> {
+        val locations = LinkedHashMap<String, Int>()
+        var next = 0
+        fun rewrite(text: String, direction: String): String {
+            val result = StringBuilder(text.length + 1024)
+            for (line in text.lineSequence()) {
+                val match = if (line.contains("layout")) null else INTERFACE_LINE.matchEntire(line)
+                if (match == null || match.groupValues[2] != direction) {
+                    result.append(line).append('\n')
+                    continue
+                }
+                val qualifiers = (match.groupValues[1] + match.groupValues[3]).trim()
+                val type = match.groupValues[4]
+                for (declarator in splitTopLevel(match.groupValues[5])) {
+                    val name = declarator.substringBefore('[').trim()
+                    val count = if (declarator.contains('[')) {
+                        declarator.substringAfter('[').substringBefore(']').trim().toIntOrNull()
+                            ?: throw ConvertException("cannot size the array in '${line.trim()}'")
+                    } else {
+                        1
+                    }
+                    val slots = count * when (type) { "mat2" -> 2; "mat3" -> 3; "mat4" -> 4; else -> 1 }
+                    val location = locations.getOrPut(name) { next.also { next += slots } }
+                    result.append("layout(location = ").append(location).append(") ")
+                    if (qualifiers.isNotEmpty()) result.append(qualifiers).append(' ')
+                    result.append(direction).append(' ').append(type).append(' ').append(declarator.trim()).append(";\n")
+                }
+            }
+            return result.toString()
+        }
+        val linkedVertex = rewrite(vertex, "out")
+        return linkedVertex to rewrite(fragment, "in")
+    }
+
     private fun matrices(modelView: String, projection: String) =
         "#define gl_ModelViewMatrix ($modelView)\n#define gl_ProjectionMatrix ($projection)\n" +
-            "#define gl_NormalMatrix mat3($modelView)\n#define ftransform() (($projection) * ($modelView) * gl_Vertex)\n"
+            "#define gl_NormalMatrix mat3($modelView)\n#define ftransform() (($projection) * ($modelView) * gl_Vertex)\n" +
+            "#define gl_ModelViewProjectionMatrix (($projection) * ($modelView))\n"
 
     // ---- shaderc ----------------------------------------------------------------------------------------------
 
@@ -607,14 +760,10 @@ private class Converter(private val source: Path, private val output: Path, priv
                     }
                     for (image in stage.images) stage.bind(image, textures.indexOf(image.name))
                 }
-                // What the vertex stage passes on is matched to the fragment stage by name.
+                // What the vertex stage passes on already has locations matched by name (see link()).
                 val outputNames = vertex.outputs.map { it.name }
-                vertex.outputs.forEachIndexed { index, output -> vertex.decorate(output, DECORATION_LOCATION, index) }
-                var spare = outputNames.size
                 for (input in fragment.inputs) {
-                    val location = outputNames.indexOf(input.name)
-                    if (location < 0) println("warning ${program.name}: the fragment stage reads '${input.name}', which the vertex stage does not write")
-                    fragment.decorate(input, DECORATION_LOCATION, if (location < 0) spare++ else location)
+                    if (input.name !in outputNames) println("warning ${program.name}: the fragment stage reads '${input.name}', which the vertex stage does not write")
                 }
                 return Translated(vertex.toMsl(flipY = true), fragment.toMsl(flipY = false), textures)
             } finally {
@@ -764,11 +913,26 @@ private class Converter(private val source: Path, private val output: Path, priv
         """.trimIndent() + "\n"
 
         val COMMON_PRELUDE = """
-            #define texture2D texture
-            #define texture2DLod textureLod
-            #define texture2DGrad textureGrad
-            #define shadow2D(s, c) vec4(texture(s, c))
+            // The old texture functions, as functions of our own rather than macros onto the new ones: packs may
+            // name a sampler "texture". (texture2D itself is a type name in this GLSL version.)
+            vec4 mc_texture2D(sampler2D s, vec2 c) { return texture(s, c); }
+            vec4 mc_texture2DLod(sampler2D s, vec2 c, float lod) { return textureLod(s, c, lod); }
+            vec4 mc_texture2DGrad(sampler2D s, vec2 c, vec2 dx, vec2 dy) { return textureGrad(s, c, dx, dy); }
+            vec4 mc_texture2DProj(sampler2D s, vec3 c) { return textureProj(s, c); }
+            vec4 mc_texture2DProj(sampler2D s, vec4 c) { return textureProj(s, c); }
+            vec4 mc_texture3D(sampler3D s, vec3 c) { return texture(s, c); }
+            vec4 mc_shadow2D(sampler2DShadow s, vec3 c) { return vec4(texture(s, c)); }
+            vec4 mc_shadow2DLod(sampler2DShadow s, vec3 c, float lod) { return vec4(textureLod(s, c, lod)); }
+            #define texture2DLod mc_texture2DLod
+            #define texture2DGrad mc_texture2DGrad
+            #define texture2DProj mc_texture2DProj
+            #define texture2D mc_texture2D
+            #define texture3D mc_texture3D
+            #define shadow2DLod mc_shadow2DLod
+            #define shadow2D mc_shadow2D
             #define attribute in
+            // A reserved word here, a plain name in the GLSL the packs are written in.
+            #define sampler mc_sampler_
             #define gl_VertexID gl_VertexIndex
             // Lightmap coordinates arrive as 0..240 and leave as 1/32..31/32, as with OpenGL's texture matrix.
             const mat4 mc_TextureMatrix[2] = mat4[2](mat4(1.0), mat4(1.0 / 256.0, 0.0, 0.0, 0.0, 0.0, 1.0 / 256.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0 / 32.0, 1.0 / 32.0, 0.0, 1.0));
@@ -776,6 +940,12 @@ private class Converter(private val source: Path, private val output: Path, priv
             // OpenGL's fixed-function fog: mc_fog is start, end, 1 / (end - start), density.
             struct mc_FogParameters { float start; float end; float scale; float density; };
             #define gl_Fog mc_FogParameters(mc_fog.x, mc_fog.y, mc_fog.z, mc_fog.w)
+        """.trimIndent() + "\n"
+
+        /** The overloads with a level-of-detail bias, which only fragment shaders have. */
+        val FRAGMENT_TEXTURE_FUNCTIONS = """
+            vec4 mc_texture2D(sampler2D s, vec2 c, float bias) { return texture(s, c, bias); }
+            vec4 mc_texture3D(sampler3D s, vec3 c, float bias) { return texture(s, c, bias); }
         """.trimIndent() + "\n"
 
         /** The game's terrain vertex (see `pipeline/TerrainVertexFormat.kt`) behind OpenGL's fixed attributes. */
@@ -798,6 +968,7 @@ private class Converter(private val source: Path, private val output: Path, priv
             #define mc_Entity vec4(vec2(McEntity), 0.0, 0.0)
             #define mc_midTexCoord vec4(McMidTexCoord, 0.0, 1.0)
             #define at_tangent McTangent
+            #define at_midBlock vec4(0.0)
         """.trimIndent() + "\n"
 
         /** The block the game fills for everything that is not terrain. */
@@ -821,6 +992,7 @@ private class Converter(private val source: Path, private val output: Path, priv
             #define mc_Entity vec4(-1.0)
             #define mc_midTexCoord vec4(UV0, 0.0, 1.0)
             #define at_tangent vec4(1.0, 0.0, 0.0, 1.0)
+            #define at_midBlock vec4(0.0)
         """.trimIndent() + "\n"
 
         val PARTICLE_INPUTS = """
@@ -836,6 +1008,7 @@ private class Converter(private val source: Path, private val output: Path, priv
             #define mc_Entity vec4(-1.0)
             #define mc_midTexCoord vec4(UV0, 0.0, 1.0)
             #define at_tangent vec4(1.0, 0.0, 0.0, 1.0)
+            #define at_midBlock vec4(0.0)
         """.trimIndent() + "\n"
 
         val CELESTIAL_INPUTS = """
@@ -867,6 +1040,7 @@ private class Converter(private val source: Path, private val output: Path, priv
             #define mc_Entity vec4(-1.0)
             #define mc_midTexCoord vec4(mc_flwTexCoord, 0.0, 1.0)
             #define at_tangent vec4(1.0, 0.0, 0.0, 1.0)
+            #define at_midBlock vec4(0.0)
         """.trimIndent() + "\n"
 
         /** One triangle that covers the target, in place of the full-screen quad OpenGL packs are given. */

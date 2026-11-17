@@ -221,6 +221,9 @@ internal class ConvertedPack(
     private val eyeInCave = Smoothed(6f, 12f)
     private val frameTimeSmooth = Smoothed(5f, 5f)
     private val eyeBrightnessSmooth = Smoothed(5f, 5f)
+    private val eyeBlockSmooth = Smoothed(10f, 10f)
+    private val eyeSkySmooth = Smoothed(10f, 10f)
+    private val celestial = Matrix4f()
     private val eyeBrightnessSmooth2 = Smoothed(2f, 2f)
     private val rainFactor = Smoothed(3f, 3f)
     private val inDry = Smoothed(20f, 10f)
@@ -257,6 +260,8 @@ internal class ConvertedPack(
 
         try {
             for ((name, image) in spec.images) images[name] = loadImage(image)
+            // Packs that bring no noise image get random noise, as they would from an OpenGL shader loader.
+            if ("noisetex" !in images) images["noisetex"] = defaultNoise()
             val header = ShaderPipeline.engineSource("pack_header.metal") + "\n"
             depthCopy = register(
                 PackProgram(
@@ -301,6 +306,26 @@ internal class ConvertedPack(
             buffer.slice()
         } finally {
             MemoryUtil.memFree(bytes)
+        }
+    }
+
+    private fun defaultNoise(): Image {
+        val size = NOISE_SIZE
+        val pixels = MemoryUtil.memAlloc(size * size * 4)
+        val texture = device.createTexture(
+            "noisetex", GpuTexture.USAGE_TEXTURE_BINDING or GpuTexture.USAGE_COPY_DST, GpuFormat.RGBA8_UNORM, size, size, 1, 1,
+        ) as MetalTexture
+        try {
+            // A fixed seed: the same pack looks the same on every start.
+            val random = java.util.Random(NOISE_SEED)
+            for (i in 0 until size * size * 4) pixels.put(i, random.nextInt(256).toByte())
+            device.encoder.writeToTexture(texture, pixels, 0, 0, 0, 0, size, size)
+            return Image(texture, device.createTextureView(texture) as MetalTextureView, true)
+        } catch (e: Exception) {
+            texture.close()
+            throw e
+        } finally {
+            MemoryUtil.memFree(pixels)
         }
     }
 
@@ -717,6 +742,25 @@ internal class ConvertedPack(
         val turn = (sky.sunAngle / (2f * Math.PI.toFloat())).let { it - Math.floor(it.toDouble()).toFloat() }
         val sunAngle = if (turn < 0.75f) turn + 0.25f else turn - 0.75f
         float("sunAngle", sunAngle)
+        // Where the sun, the moon and "up" are, in view space and 100 units away, as packs expect them.
+        celestial.identity()
+            .rotateY(Math.toRadians(-90.0).toFloat())
+            .rotateZ(Math.toRadians(spec.sunPathRotation.toDouble()).toFloat())
+            .rotateX(Math.toRadians(turn * 360.0).toFloat())
+        celestial.transformDirection(look.set(0f, 100f, 0f))
+        modelView.transformDirection(look)
+        vector("sunPosition", look.x, look.y, look.z)
+        if (sunAngle <= 0.5f) vector("shadowLightPosition", look.x, look.y, look.z)
+        look.normalize()
+        vector("sunVec", look.x, look.y, look.z)
+        celestial.transformDirection(look.set(0f, -100f, 0f))
+        modelView.transformDirection(look)
+        vector("moonPosition", look.x, look.y, look.z)
+        if (sunAngle > 0.5f) vector("shadowLightPosition", look.x, look.y, look.z)
+        modelView.transformDirection(look.set(0f, 100f, 0f))
+        vector("upPosition", look.x, look.y, look.z)
+        look.normalize()
+        vector("upVec", look.x, look.y, look.z)
         // The light that casts shadows is the sun by day and the moon by night. The matrices follow the
         // conventions packs are written against: the light looks down its own z axis from 100 blocks away,
         // and the map moves in whole steps so that its texels do not crawl as the camera moves.
@@ -738,7 +782,7 @@ internal class ConvertedPack(
         float("frameTimeCounter", seconds)
         float("framemod2", (frameCounter % 2).toFloat())
         float("framemod4", (frameCounter % 4).toFloat())
-        float("framemod8", (frameCounter % 8).toFloat())
+        number("framemod8", frameCounter % 8)
         float("framemod600", (frameCounter % 600).toFloat())
         if (!held) frameCounter = (frameCounter + 1) % 720720
         float("frameTimeSmooth", frameTimeSmooth.update(frameTime, frameTime))
@@ -765,6 +809,8 @@ internal class ConvertedPack(
         val fog = camera.fogData
         vector("fogColor", fog.color.x, fog.color.y, fog.color.z)
         vector("skyColor", (sky.skyColor shr 16 and 0xFF) / 255f, (sky.skyColor shr 8 and 0xFF) / 255f, (sky.skyColor and 0xFF) / 255f)
+        float("fogStart", fog.renderDistanceStart)
+        float("fogEnd", fog.renderDistanceEnd)
         val fogRange = maxOf(fog.renderDistanceEnd - fog.renderDistanceStart, 0.001f)
         vector("mc_fog", fog.renderDistanceStart, fog.renderDistanceEnd, 1f / fogRange, 0f)
         val inWater = when (camera.fogType) {
@@ -792,6 +838,10 @@ internal class ConvertedPack(
             skyLight = level.getBrightness(LightLayer.SKY, lightProbe)
         }
         integers("eyeBrightness", blockLight * 16, skyLight * 16)
+        integers(
+            "eyeBrightnessSmooth",
+            Math.round(eyeBlockSmooth.update(blockLight * 16f, frameTime)), Math.round(eyeSkySmooth.update(skyLight * 16f, frameTime)),
+        )
         val skyBrightness = skyLight * 16 / 240f
         float("eyeBrightnessM", eyeBrightnessSmooth.update(skyBrightness, frameTime))
         float("eyeBrightnessM2", eyeBrightnessSmooth2.update(if (skyLight >= 15) 1f else 0f, frameTime))
@@ -840,6 +890,14 @@ internal class ConvertedPack(
             }
         }
         return offsets.getInt(name)
+    }
+
+    /** A whole number for a uniform that packs declare as int or as float. */
+    private fun number(name: String, value: Int) {
+        val at = offset(name, "int", "float")
+        if (at >= 0) {
+            if (types[name] == "float") data.putFloat(at, value.toFloat()) else data.putInt(at, value)
+        }
     }
 
     private fun float(name: String, value: Float) {
@@ -1007,10 +1065,17 @@ internal class ConvertedPack(
         )
 
         val DEPTH_FORMAT = MetalFormats.code(GpuFormat.D32_FLOAT)
-        val GAUX = mapOf("gaux1" to "colortex4", "gaux2" to "colortex5", "gaux3" to "colortex6", "gaux4" to "colortex7")
+        // The names buffers had in older packs.
+        val GAUX = mapOf(
+            "gcolor" to "colortex0", "gdepth" to "colortex1", "gnormal" to "colortex2", "composite" to "colortex3",
+            "gaux1" to "colortex4", "gaux2" to "colortex5", "gaux3" to "colortex6", "gaux4" to "colortex7",
+            "gdepthtex" to "depthtex0", "shadow" to "shadowtex0", "watershadow" to "shadowtex0",
+        )
 
         /** The block atlas, which the game binds itself as Sampler0. */
         val ATLAS_NAMES = setOf("tex", "gtexture", "texture")
+        const val NOISE_SIZE = 256
+        const val NOISE_SEED = 2626L
 
         // Buffer indices as the converter assigns them.
         val PACK_UNIFORMS_ENTRY = BindingEntry(BindingEntry.UNIFORM_BUFFER, PACK_UNIFORMS, null, 0)
