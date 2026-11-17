@@ -1,0 +1,35 @@
+{
+  "name": "Complementary r5.9.3 (Unbound sky)",
+  "scales": {
+    "colortex1": 0.5,
+    "colortex7": 0.5
+  },
+  "textures": {
+    "noisetex": {
+      "file": "lib/textures/noise.png",
+      "repeat": true
+    },
+    "deferred.colortex3": {
+      "file": "lib/textures/cloud-water.png",
+      "repeat": true
+    },
+    "gbuffers.gaux4": {
+      "file": "lib/textures/cloud-water.png",
+      "repeat": true
+    }
+  },
+  "blend": {
+    "gbuffers_water": [
+      0,
+      3
+    ]
+  },
+  "alphaTest": {
+    "gbuffers_water": 0.0001
+  },
+  "separateAo": true,
+  "options": {
+    "CLOUD_STYLE_DEFINE": "3",
+    "SUN_MOON_STYLE_DEFINE": "2"
+  }
+}
