@@ -26,6 +26,7 @@ class MetalCraftClient : ClientModInitializer {
             LOGGER.error("Native bridge self-check failed", t)
         }
         registerShaderPackKey()
+        dev.skarch.metalcraft.zoom.Zoom.register()
         // Create draws its moving parts through Flywheel; give it a backend that works on Metal.
         if (FabricLoader.getInstance().isModLoaded("create")) {
             try {

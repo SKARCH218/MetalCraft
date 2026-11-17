@@ -5,10 +5,12 @@
   "compatibilityLevel": "JAVA_25",
   "client": [
     "BufferBuilderMixin",
+    "CameraMixin",
     "ChunkSectionsToRenderMixin",
     "GameRendererMixin",
     "LevelRendererAccessor",
     "MinecraftMixin",
+    "MouseHandlerMixin",
     "RenderPipelinesMixin",
     "SectionCompilerMixin"
   ],
