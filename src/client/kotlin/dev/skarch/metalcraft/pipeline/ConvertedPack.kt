@@ -204,6 +204,13 @@ internal class ConvertedPack(
     private val offsets = Object2IntOpenHashMap<String>().apply { defaultReturnValue(-1) }
     private val types = HashMap<String, String>()
     private val written = HashSet<String>()
+    private val customUniforms: CustomUniforms? = if (spec.customUniforms.isEmpty()) {
+        null
+    } else {
+        val byName = spec.uniforms.associateBy { it.name }
+        CustomUniforms(spec.customUniforms, { byName[it]?.offset ?: -1 }, { byName[it]?.type }, pack.id)
+    }
+    private var lastBiomeKey: Any? = null
 
     private val modelView = Matrix4f()
     private val projection = Matrix4f()
@@ -556,7 +563,8 @@ internal class ConvertedPack(
         for (pass in passes) if (pass.stage != "deferred") runPass(pass, target)
         if (!reportedMissing) {
             reportedMissing = true
-            val missing = spec.uniforms.map { it.name }.filter { it !in written }
+            val computed = customUniforms?.names ?: emptyList()
+            val missing = spec.uniforms.map { it.name }.filter { it !in written && it !in computed }
             if (missing.isNotEmpty()) LOGGER.info("Shader pack '{}': uniforms the engine does not set yet (they are 0): {}", pack.id, missing)
         }
     }
@@ -872,9 +880,48 @@ internal class ConvertedPack(
         float("isEyeInCave", if (inWater == 0) 1f - eyeInCave.update(caveTarget, frameTime) else 0f)
         float("starter", 1f)
         writeBiomeUniforms(level, frameTime)
+        writeCustomUniforms(minecraft, level, frameTime)
 
         data.position(0).limit(spec.uniformBlockSize)
         frameSlice = device.encoder.transientMemory().uploadGpu(data, 16L, GpuBuffer.USAGE_UNIFORM)
+    }
+
+    /** The pack's own expressions, after everything they may refer to has been written. */
+    private fun writeCustomUniforms(minecraft: Minecraft, level: Level?, frameTime: Float) {
+        val custom = customUniforms ?: return
+        val inputs = custom.inputs
+        val player = minecraft.player
+        if (player != null) {
+            inputs.inWater = player.isInWater
+            inputs.inLava = player.isInLava
+            inputs.sneaking = player.isCrouching
+            inputs.sprinting = player.isSprinting
+            inputs.onGround = player.onGround()
+            inputs.alive = player.isAlive
+            inputs.burning = player.isOnFire
+            inputs.hurt = player.hurtTime > 0
+            inputs.invisible = player.isInvisible
+            inputs.glowing = player.isCurrentlyGlowing
+            inputs.riding = player.isPassenger
+            inputs.wet = player.isInWaterOrRain
+        }
+        if (level != null) {
+            val biome = level.getBiome(lightProbe)
+            val climate = biome.value()
+            inputs.temperature = climate.baseTemperature
+            inputs.rainfall = if (climate.hasPrecipitation()) 1f else 0f
+            inputs.precipitation = when (climate.getPrecipitationAt(lightProbe, level.seaLevel)) {
+                Biome.Precipitation.RAIN -> 1f
+                Biome.Precipitation.SNOW -> 2f
+                else -> 0f
+            }
+            val key = biome.unwrapKey().orElse(null)
+            if (key !== lastBiomeKey) {
+                lastBiomeKey = key
+                inputs.biomeName = key?.identifier()?.path ?: ""
+            }
+        }
+        custom.evaluate(data, frameTime, written)
     }
 
     /** How much the camera is "in" each kind of biome, fading over a few seconds as the pack's own rules say. */

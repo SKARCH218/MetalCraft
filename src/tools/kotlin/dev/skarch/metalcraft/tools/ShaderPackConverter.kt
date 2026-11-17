@@ -96,6 +96,23 @@ private val DRAW_BUFFERS = Regex("""DRAWBUFFERS:\s*([0-7]+)""")
 private val RENDER_TARGETS = Regex("""RENDERTARGETS:\s*([0-9, ]+)""")
 private val SHADER_FILE = Regex("""\.(glsl|fsh|vsh|csh|gsh|inc)$""")
 
+private val CUSTOM_UNIFORM = Regex("""(uniform|variable)\.(\w+)\.(\w+)\s*=\s*(.+)""")
+private val IDENTIFIER = Regex("""[A-Za-z_]\w*""")
+
+/** Uniforms every shader loader provides, with their types: the ones pack expressions refer to. */
+private val STANDARD_UNIFORMS = mapOf(
+    "frameCounter" to "int", "frameTime" to "float", "frameTimeCounter" to "float", "worldTime" to "int", "worldDay" to "int",
+    "moonPhase" to "int", "sunAngle" to "float", "shadowAngle" to "float", "rainStrength" to "float", "wetness" to "float",
+    "viewWidth" to "float", "viewHeight" to "float", "aspectRatio" to "float", "near" to "float", "far" to "float",
+    "eyeAltitude" to "float", "isEyeInWater" to "int", "blindness" to "float", "darknessFactor" to "float",
+    "darknessLightFactor" to "float", "nightVision" to "float", "screenBrightness" to "float", "playerMood" to "float",
+    "eyeBrightness" to "ivec2", "eyeBrightnessSmooth" to "ivec2", "cameraPosition" to "vec3", "previousCameraPosition" to "vec3",
+    "sunPosition" to "vec3", "moonPosition" to "vec3", "shadowLightPosition" to "vec3", "upPosition" to "vec3",
+    "skyColor" to "vec3", "fogColor" to "vec3", "fogStart" to "float", "fogEnd" to "float", "centerDepthSmooth" to "float",
+    "heldItemId" to "int", "heldItemId2" to "int", "heldBlockLightValue" to "int", "heldBlockLightValue2" to "int",
+    "hideGUI" to "bool", "renderStage" to "int", "constantMood" to "float", "thunderStrength" to "float",
+)
+
 /** What stands in for a program a pack leaves out, most specific first (the order shader loaders use). */
 private val FALLBACKS = linkedMapOf(
     "gbuffers_textured" to listOf("gbuffers_basic"),
@@ -226,6 +243,13 @@ private class Converter(private val source: Path, private val output: Path, priv
             dimensions[folder] = programs
         }
         if (dimensions.isEmpty()) throw ConvertException("$source has none of the folders $DIMENSION_FOLDERS")
+        val custom = customUniforms()
+        // An expression can use a standard uniform no shader declares. It joins the block so the engine has it.
+        for (definition in custom) {
+            for (word in IDENTIFIER.findAll(definition.get("expression").asString)) {
+                STANDARD_UNIFORMS[word.value]?.let { uniformTypes.putIfAbsent(word.value, it) }
+            }
+        }
         val uniforms = layoutUniforms()
 
         Files.createDirectories(output)
@@ -249,6 +273,7 @@ private class Converter(private val source: Path, private val output: Path, priv
         itemIds()?.let { manifest.addProperty("itemIds", it) }
         port.get("separateAo")?.let { manifest.add("separateAo", it) }
         manifest.add("dimensions", manifestDimensions)
+        manifest.add("customUniforms", JsonArray().also { array -> custom.forEach(array::add) })
         manifest.addProperty("uniformBlockSize", uniforms.size)
         manifest.add("uniforms", JsonArray().also { array ->
             for (uniform in uniforms.members) {
@@ -364,6 +389,33 @@ private class Converter(private val source: Path, private val output: Path, priv
         }
         manifest.add("programs", manifestPrograms)
         return manifest to failures
+    }
+
+    /**
+     * The uniforms the pack computes with expressions (`uniform.<type>.<name> = ...` and `variable.<type>.<name>
+     * = ...` in shaders.properties), in the order the pack lists them. The engine evaluates them every frame.
+     */
+    private fun customUniforms(): List<JsonObject> {
+        val file = source.resolve("shaders.properties")
+        if (!file.exists()) return emptyList()
+        val result = ArrayList<JsonObject>()
+        val seen = HashSet<String>()
+        // A trailing backslash continues a line.
+        val lines = Files.readString(file).replace(Regex("""\\\r?\n\s*"""), " ").lines()
+        for (line in lines) {
+            val match = CUSTOM_UNIFORM.matchEntire(line.trim()) ?: continue
+            val name = match.groupValues[3]
+            if (!seen.add(name)) continue
+            result.add(
+                JsonObject().apply {
+                    addProperty("name", name)
+                    addProperty("type", match.groupValues[2])
+                    addProperty("variable", match.groupValues[1] == "variable")
+                    addProperty("expression", match.groupValues[4].trim())
+                },
+            )
+        }
+        return result
     }
 
     private fun programNames(folder: Path): List<String> {
@@ -1019,6 +1071,10 @@ private class Converter(private val source: Path, private val output: Path, priv
             #define gl_Color ColorModulator
             #define gl_MultiTexCoord0 vec4(UV0, 0.0, 1.0)
             #define gl_MultiTexCoord1 vec4(240.0, 240.0, 0.0, 1.0)
+            #define mc_Entity vec4(-1.0)
+            #define mc_midTexCoord gl_MultiTexCoord0
+            #define at_tangent vec4(1.0, 0.0, 0.0, 1.0)
+            #define at_midBlock vec4(0.0)
         """.trimIndent() + "\n"
 
         /**
@@ -1050,6 +1106,10 @@ private class Converter(private val source: Path, private val output: Path, priv
             #define gl_MultiTexCoord1 vec4(0.0, 0.0, 0.0, 1.0)
             #define gl_Color vec4(1.0)
             #define gl_Normal vec3(0.0, 0.0, 1.0)
+            #define mc_Entity vec4(-1.0)
+            #define mc_midTexCoord gl_MultiTexCoord0
+            #define at_tangent vec4(1.0, 0.0, 0.0, 1.0)
+            #define at_midBlock vec4(0.0)
         """.trimIndent() + "\n"
 
         val WORLD_FRAGMENT_PRELUDE = """

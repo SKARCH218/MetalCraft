@@ -236,6 +236,13 @@ internal class ConvertedSpec(json: JsonObject, dimension: String) {
     /** Whether the pack wants ambient occlusion in the alpha of terrain colours instead of multiplied in. */
     val separateAo: Boolean = json.get("separateAo")?.asBoolean ?: false
     val uniformBlockSize: Int = json.get("uniformBlockSize").asInt
+    /** Uniforms the pack computes with expressions, see [CustomUniforms]. */
+    val customUniforms: List<CustomUniforms.Definition> = json.getAsJsonArray("customUniforms")?.map {
+        val entry = it.asJsonObject
+        CustomUniforms.Definition(
+            entry.get("name").asString, entry.get("type").asString, entry.get("variable").asBoolean, entry.get("expression").asString,
+        )
+    } ?: emptyList()
     val uniforms: List<Uniform> = json.getAsJsonArray("uniforms").map {
         val uniform = it.asJsonObject
         Uniform(uniform.get("name").asString, uniform.get("type").asString, uniform.get("offset").asInt)
@@ -251,18 +258,46 @@ internal class ConvertedSpec(json: JsonObject, dimension: String) {
 
     private companion object {
         /** OpenGL names as packs write them. Metal has no three-channel formats, so those get a fourth. */
+        /** OpenGL's name for a buffer format. Three-channel formats Metal lacks get a fourth channel. */
         fun format(name: String): GpuFormat = when (name) {
             "R11F_G11F_B10F" -> GpuFormat.RG11B10_FLOAT
-            "RGBA8", "RGB8" -> GpuFormat.RGBA8_UNORM
+            "RGBA8", "RGB8", "RGBA", "RGB", "RGB5_A1", "RGBA4", "RGB5", "RGBA2", "R3_G3_B2" -> GpuFormat.RGBA8_UNORM
             "RGBA8_SNORM", "RGB8_SNORM" -> GpuFormat.RGBA8_SNORM
-            "RGBA16F", "RGB16F" -> GpuFormat.RGBA16_FLOAT
-            "RGBA16", "RGB16" -> GpuFormat.RGBA16_UNORM
+            "RGBA16F", "RGB16F", "RGB9_E5" -> GpuFormat.RGBA16_FLOAT
+            "RGBA32F", "RGB32F" -> GpuFormat.RGBA32_FLOAT
+            "RGBA16", "RGB16", "RGBA12", "RGB12" -> GpuFormat.RGBA16_UNORM
+            "RGBA16_SNORM", "RGB16_SNORM" -> GpuFormat.RGBA16_SNORM
             "RG16F" -> GpuFormat.RG16_FLOAT
+            "RG32F" -> GpuFormat.RG32_FLOAT
+            "RG16" -> GpuFormat.RG16_UNORM
+            "RG16_SNORM" -> GpuFormat.RG16_SNORM
+            "RG8" -> GpuFormat.RG8_UNORM
+            "RG8_SNORM" -> GpuFormat.RG8_SNORM
             "R16F" -> GpuFormat.R16_FLOAT
             "R32F" -> GpuFormat.R32_FLOAT
+            "R16" -> GpuFormat.R16_UNORM
+            "R16_SNORM" -> GpuFormat.R16_SNORM
             "R8" -> GpuFormat.R8_UNORM
-            "RG8" -> GpuFormat.RG8_UNORM
-            "RGB10_A2" -> GpuFormat.RGB10A2_UNORM
+            "R8_SNORM" -> GpuFormat.R8_SNORM
+            "RGB10_A2", "RGB10" -> GpuFormat.RGB10A2_UNORM
+            "R8UI" -> GpuFormat.R8_UINT
+            "R8I" -> GpuFormat.R8_SINT
+            "RG8UI" -> GpuFormat.RG8_UINT
+            "RG8I" -> GpuFormat.RG8_SINT
+            "RGBA8UI", "RGB8UI" -> GpuFormat.RGBA8_UINT
+            "RGBA8I", "RGB8I" -> GpuFormat.RGBA8_SINT
+            "R16UI" -> GpuFormat.R16_UINT
+            "R16I" -> GpuFormat.R16_SINT
+            "RG16UI" -> GpuFormat.RG16_UINT
+            "RG16I" -> GpuFormat.RG16_SINT
+            "RGBA16UI", "RGB16UI" -> GpuFormat.RGBA16_UINT
+            "RGBA16I", "RGB16I" -> GpuFormat.RGBA16_SINT
+            "R32UI" -> GpuFormat.R32_UINT
+            "R32I" -> GpuFormat.R32_SINT
+            "RG32UI" -> GpuFormat.RG32_UINT
+            "RG32I" -> GpuFormat.RG32_SINT
+            "RGBA32UI", "RGB32UI" -> GpuFormat.RGBA32_UINT
+            "RGBA32I", "RGB32I" -> GpuFormat.RGBA32_SINT
             else -> throw IllegalArgumentException("Unknown buffer format '$name'")
         }
     }
