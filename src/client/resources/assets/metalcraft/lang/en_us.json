@@ -3,5 +3,16 @@
   "key.metalcraft.zoom": "Zoom",
   "key.metalcraft.cycle_shaderpack": "Next Shader Pack",
   "metalcraft.shaderpack.selected": "Shader pack: %s",
-  "metalcraft.shaderpack.needs_metal": "Shader packs need the Metal renderer"
+  "metalcraft.shaderpack.needs_metal": "Shader packs need the Metal renderer",
+  "metalcraft.shaders.title": "Shader Settings",
+  "metalcraft.shaders.off": "Off",
+  "metalcraft.shaders.upscale": "MetalFX Upscaling",
+  "metalcraft.shaders.upscale.off": "Off",
+  "metalcraft.shaders.upscale.spatial": "Spatial",
+  "metalcraft.shaders.upscale.temporal": "Temporal",
+  "metalcraft.shaders.render_scale": "Render Scale: %s%%",
+  "metalcraft.shaders.restart_note": "Upscaling and render scale apply after a restart",
+  "metalcraft.shaders.open_folder": "Open Shader Packs Folder",
+  "metalcraft.shaders.button": "Shaders...",
+  "key.metalcraft.shader_settings": "Shader Settings"
 }

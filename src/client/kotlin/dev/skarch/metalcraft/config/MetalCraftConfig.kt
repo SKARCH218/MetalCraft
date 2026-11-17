@@ -27,10 +27,12 @@ object MetalCraftConfig {
     var shaderPack: String
 
     /** MetalFX upscaling: "off", "spatial" or "temporal". Applies at the next start. */
-    val upscale: String
+    @Volatile
+    var upscale: String
 
     /** Size of the image the world is rendered at, in percent of the window (50 to 100), when upscaling. */
-    val renderScale: Int
+    @Volatile
+    var renderScale: Int
 
     init {
         val values = HashMap<String, String>()

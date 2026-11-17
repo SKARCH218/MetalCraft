@@ -27,12 +27,32 @@ class MetalCraftClient : ClientModInitializer {
         }
         registerShaderPackKey()
         dev.skarch.metalcraft.zoom.Zoom.register()
+        registerShaderSettings()
         // Create draws its moving parts through Flywheel; give it a backend that works on Metal.
         if (FabricLoader.getInstance().isModLoaded("create")) {
             try {
                 dev.skarch.metalcraft.flywheel.MetalFlywheel.register()
             } catch (t: Throwable) {
                 LOGGER.error("Could not register the Flywheel backend for Metal; Create will use its plain renderers", t)
+            }
+        }
+    }
+
+    /** The shader settings screen opens with a key and from a button on the video settings screen. */
+    private fun registerShaderSettings() {
+        val key = KeyMappingHelper.registerKeyMapping(KeyMapping("key.metalcraft.shader_settings", GLFW.GLFW_KEY_O, KeyMapping.Category.MISC))
+        ClientTickEvents.END_CLIENT_TICK.register { client ->
+            while (key.consumeClick()) {
+                if (client.gui.screen() == null) client.gui.setScreen(dev.skarch.metalcraft.config.ShaderSettingsScreen(null))
+            }
+        }
+        net.fabricmc.fabric.api.client.screen.v1.ScreenEvents.AFTER_INIT.register { client, screen, width, _ ->
+            if (screen is net.minecraft.client.gui.screens.options.VideoSettingsScreen) {
+                net.fabricmc.fabric.api.client.screen.v1.Screens.getWidgets(screen).add(
+                    net.minecraft.client.gui.components.Button.builder(Component.translatable("metalcraft.shaders.button")) {
+                        client.gui.setScreen(dev.skarch.metalcraft.config.ShaderSettingsScreen(screen))
+                    }.bounds(width - 106, 6, 100, 20).build(),
+                )
             }
         }
     }

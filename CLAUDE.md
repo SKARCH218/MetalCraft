@@ -251,7 +251,8 @@ run/test-output/<날짜-시간>/<backend>/
 - 부품을 4배로 늘린 create 장면(약 6,100개, `-Pmetalcraft.test.createLayers=8`): Metal + Complementary 약 151 FPS, Iris + Complementary 약 13 FPS, Metal 팩 없음 약 494 FPS.
 - Flywheel 백엔드에 아직 없는 것: 블록 파괴 오버레이(crumbling), 순서 무관 투명도(일반 반투명으로 그림), Flywheel 디버그 보고서의 메시 풀 항목, 팩 그림자맵에 Create 부품 그리기, 컨트랩션(움직이는 구조물)과 벨트·유체 등 다른 인스턴스 타입의 화면 검증.
 - 비디오 설정의 Graphics API에 "Metal"이 추가돼 있다(`PreferredGraphicsApiMixin`이 enum에 값을 덧붙인다). Metal을 고르면 Metal, OpenGL·Vulkan을 고르면 게임 렌더러, "기본"이면 `config/metalcraft.properties`의 `renderer`를 따른다(`BackendSelector`가 options.txt를 직접 읽는다). 재시작 후 적용.
-- 아직 없는 것: 쉐이더 설정 화면, GPU 타임스탬프 쿼리(F3의 GPU 사용률은 의미 없음), multi-draw·indirect draw(장치 기능으로 꺼 둠), 렌더 영역이 일부인 패스의 색·깊이 단독 클리어.
+- 쉐이더 설정 화면(`config/ShaderSettingsScreen.kt`): 팩 목록(클릭하면 바로 전환), MetalFX 방식과 렌더 스케일(재시작 후 적용), 팩 폴더 열기. 비디오 설정 오른쪽 위의 "쉐이더..." 버튼이나 O 키로 연다. Iris의 화면 코드는 쓰지 않았다(LGPL). 자동 테스트의 `gui_shaders` 장면이 이 화면과 비디오 설정 화면을 찍는다(눈으로 확인용).
+- 아직 없는 것: 게임 안에서 바꾸는 팩별 옵션 화면, GPU 타임스탬프 쿼리(F3의 GPU 사용률은 의미 없음), multi-draw·indirect draw(장치 기능으로 꺼 둠), 렌더 영역이 일부인 패스의 색·깊이 단독 클리어.
 - Java 예외 한 곳: `backend/MetalBackendBase.java`. Mojang이 null을 넘기는데 non-null로 선언된 `GpuBackend.handleWindowCreationErrors`는 Kotlin으로 안전하게 오버라이드할 수 없어서 Java로 받는다.
 - Metal 백엔드는 게임테스트 API가 하는 화면 출력 크기 보정(`GlCommandEncoderMixin`, `VulkanGpuSurfaceMixin` 참고)을 직접 처리해야 한다.
 

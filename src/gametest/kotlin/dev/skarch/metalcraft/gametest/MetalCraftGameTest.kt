@@ -398,6 +398,20 @@ private class Harness(private val context: ClientGameTestContext) {
                 capture("gui_inventory", OVERWORLD)
                 closeScreen()
             }
+            // MetalCraft's own screens, looked at by eye: the shader settings and the video settings with the
+            // added button and Graphics API choice.
+            if (selected("gui_shaders")) {
+                context.onClient { it.gui.setScreen(dev.skarch.metalcraft.config.ShaderSettingsScreen(null)) }
+                context.waitForScreen(dev.skarch.metalcraft.config.ShaderSettingsScreen::class.java)
+                capture("gui_shaders", OVERWORLD, pixelCompare = false, benchmarkable = false)
+                closeScreen()
+                context.onClient {
+                    it.gui.setScreen(net.minecraft.client.gui.screens.options.VideoSettingsScreen(dev.skarch.metalcraft.config.ShaderSettingsScreen(null), it, it.options))
+                }
+                context.waitForScreen(net.minecraft.client.gui.screens.options.VideoSettingsScreen::class.java)
+                capture("gui_video", OVERWORLD, pixelCompare = false, benchmarkable = false)
+                closeScreen()
+            }
             // The renderer has to survive the window changing size and every texture and shader being
             // reloaded. The view turns away from the mobs, whose poses depend on how long the reload took.
             if (selected("after_reload")) {
@@ -663,7 +677,7 @@ private class Harness(private val context: ClientGameTestContext) {
         const val NETHER = "minecraft:the_nether"
 
         val NORMAL_WORLD_SCENES = listOf("plains_day", "ocean", "underwater", "night_torches", "held_light", "cave", "nether")
-        val FLAT_WORLD_SCENES = listOf("create", "entities", "gui_inventory", "after_reload", "gui_chat", "entities_fx", "gui_f3")
+        val FLAT_WORLD_SCENES = listOf("create", "entities", "gui_inventory", "gui_shaders", "after_reload", "gui_chat", "entities_fx", "gui_f3")
         val ALL_SCENES = (NORMAL_WORLD_SCENES + FLAT_WORLD_SCENES).toSet()
 
         fun fmt(value: Double): String = String.format(Locale.ROOT, "%.2f", value)

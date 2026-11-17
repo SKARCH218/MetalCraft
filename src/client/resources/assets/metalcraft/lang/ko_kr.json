@@ -3,5 +3,16 @@
   "key.metalcraft.zoom": "줌",
   "key.metalcraft.cycle_shaderpack": "다음 쉐이더팩",
   "metalcraft.shaderpack.selected": "쉐이더팩: %s",
-  "metalcraft.shaderpack.needs_metal": "쉐이더팩은 Metal 렌더러에서만 동작합니다"
+  "metalcraft.shaderpack.needs_metal": "쉐이더팩은 Metal 렌더러에서만 동작합니다",
+  "metalcraft.shaders.title": "쉐이더 설정",
+  "metalcraft.shaders.off": "끔",
+  "metalcraft.shaders.upscale": "MetalFX 업스케일",
+  "metalcraft.shaders.upscale.off": "끔",
+  "metalcraft.shaders.upscale.spatial": "공간",
+  "metalcraft.shaders.upscale.temporal": "시간",
+  "metalcraft.shaders.render_scale": "렌더 스케일: %s%%",
+  "metalcraft.shaders.restart_note": "업스케일과 렌더 스케일은 재시작 후 적용됩니다",
+  "metalcraft.shaders.open_folder": "쉐이더팩 폴더 열기",
+  "metalcraft.shaders.button": "쉐이더...",
+  "key.metalcraft.shader_settings": "쉐이더 설정"
 }

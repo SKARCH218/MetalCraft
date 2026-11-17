@@ -139,6 +139,21 @@ object ShaderPipeline {
         return selectedName()
     }
 
+    /** Looks for packs again and returns their folder names with display names, in menu order. */
+    fun refreshPacks(): List<Pair<String, String>> {
+        packs = ShaderPack.discover()
+        return packs.map { it.id to it.displayName }
+    }
+
+    /** Switches to the pack with this folder name ("off" for none) and remembers it in the config. */
+    fun selectPack(id: String) {
+        if (id == selected) return
+        selected = if (id == OFF || packs.any { it.id == id }) id else OFF
+        failedPack = null
+        MetalCraftConfig.shaderPack = selected
+        MetalCraftConfig.save()
+    }
+
     // ---- frame hooks, called from GameRendererMixin -------------------------------------------------------
 
     /**
