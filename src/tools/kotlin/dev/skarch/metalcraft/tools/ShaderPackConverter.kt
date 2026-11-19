@@ -174,6 +174,7 @@ private val BLEND_FACTORS = mapOf(
 private val SWITCH_LINE = Regex("""^(\s*)(//\s*)?#define\s+(\w+)(\s*(?://.*)?)$""")
 private val SIZE_PROPERTY = Regex("""size\.buffer\.(colortex\d+|gcolor|gdepth|gnormal|composite|gaux[1-4])\s*=\s*([\d.]+)\s+([\d.]+)""")
 private val MIPMAP_CONSTANT = Regex("""const\s+bool\s+(\w+)MipmapEnabled\s*=\s*true\s*;""")
+private val ALPHA_TEST_PROPERTY = Regex("""alphaTest\.(\w+)\s*=\s*(?:off|false|GREATER\s+([\d.]+)).*""", RegexOption.IGNORE_CASE)
 private val WORD = Regex("""\b[A-Za-z_]\w*\b""")
 private val OPTION_DEFINE = Regex("""\s*(//)?\s*#define\s+(\w+)[ \t]*([^\s/]*).*""")
 private val OPTION_FILES = setOf("glsl", "fsh", "vsh", "csh", "gsh", "h", "inc", "settings", "frag", "vert")
@@ -395,7 +396,14 @@ private class Converter(private val source: Path, private val output: Path, priv
                             }
                         })
                         entry.add("targets", JsonArray().also { array -> targets.forEach(array::add) })
-                        port.getAsJsonObject("blend")?.get(program.name)?.let { entry.add("blend", it) }
+                        val portBlend = port.getAsJsonObject("blend")?.get(program.name)
+                        if (portBlend != null) {
+                            entry.add("blend", portBlend)
+                        } else if (program.name == "gbuffers_water") {
+                            // Translucent terrain is drawn with OpenGL's blending on, which applies to every
+                            // buffer the program writes unless the pack says otherwise (see packBlend).
+                            entry.add("blend", JsonArray().also { array -> targets.forEach(array::add) })
+                        }
                         val mipmaps = MIPMAP_CONSTANT.findAll(fragmentGlsl).mapNotNull { LEGACY_BUFFERS[it.groupValues[1]] ?: it.groupValues[1].removePrefix("colortex").toIntOrNull() }.toSortedSet()
                         if (mipmaps.isNotEmpty()) entry.add("mipmaps", JsonArray().also { array -> mipmaps.forEach(array::add) })
                         packBlend["$folder/${program.name}"]?.let { blend ->
@@ -405,7 +413,7 @@ private class Converter(private val source: Path, private val output: Path, priv
                                 for ((buffer, factors) in blend) functions.add(buffer, JsonArray().also { array -> factors.forEach(array::add) })
                             })
                         }
-                        port.getAsJsonObject("alphaTest")?.get(program.name)?.let { entry.add("alphaTest", it) }
+                        (port.getAsJsonObject("alphaTest")?.get(program.name)?.asFloat ?: packAlphaTest[program.name])?.let { entry.addProperty("alphaTest", it) }
                         manifestPrograms.add(program.name, entry)
                         println("ok      ${program.name}  textures=${translated.textures}  targets=$targets")
                     } finally {
@@ -646,6 +654,19 @@ private class Converter(private val source: Path, private val output: Path, priv
             for (line in activeLines(file, macros)) {
                 val match = PROGRAM_ENABLED.matchEntire(line) ?: continue
                 if (Condition(match.groupValues[2], macros, flags = true).evaluate() == 0L) result.add(match.groupValues[1])
+            }
+        }
+        result
+    }
+
+    /** `alphaTest.<program> = GREATER <value>` (or `off`) in shaders.properties: the cut-off per program. */
+    private val packAlphaTest: Map<String, Float> by lazy {
+        val result = HashMap<String, Float>()
+        val file = source.resolve("shaders.properties")
+        if (file.exists()) {
+            for (line in activeLines(file, HashMap(packDefines))) {
+                val match = ALPHA_TEST_PROPERTY.matchEntire(line) ?: continue
+                result[match.groupValues[1]] = match.groupValues[2].toFloatOrNull() ?: -1f
             }
         }
         result
