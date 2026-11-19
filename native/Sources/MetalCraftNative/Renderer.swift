@@ -369,6 +369,41 @@ public func mcn_texture_create(
     }
 }
 
+/// A read-only image filled from memory: two-dimensional, or a volume (`volume` != 0) of `depth` slices.
+/// `bytes` holds `depth` slices of `height` rows of `bytesPerRow` bytes. Returns the texture twice, each
+/// handle with a reference of its own (one for the caller's texture object, one for its view).
+@_cdecl("mcn_image_create")
+public func mcn_image_create(
+    _ handle: Int, _ format: Int32, _ width: Int32, _ height: Int32, _ depth: Int32, _ volume: Int32,
+    _ bytes: UnsafeRawPointer?, _ bytesPerRow: Int32, _ name: UnsafePointer<CChar>?,
+    _ outTexture: UnsafeMutablePointer<Int>?, _ outView: UnsafeMutablePointer<Int>?
+) -> Int32 {
+    guarded(MCN_ERR_OUT_OF_MEMORY) {
+        guard let outTexture, let outView, let bytes else { throw SurfaceError("mcn_image_create: a pointer is null") }
+        guard let pixelFormat = pixelFormat(code: format) else { throw SurfaceError("Image format \(format) is not available in Metal") }
+        guard width > 0, height > 0, depth > 0, bytesPerRow > 0 else { throw SurfaceError("Image size \(width)x\(height)x\(depth) is not valid") }
+        let descriptor = MTLTextureDescriptor()
+        descriptor.pixelFormat = pixelFormat
+        descriptor.width = Int(width)
+        descriptor.height = Int(height)
+        descriptor.textureType = volume != 0 ? .type3D : .type2D
+        descriptor.depth = volume != 0 ? Int(depth) : 1
+        descriptor.mipmapLevelCount = 1
+        descriptor.storageMode = .shared
+        descriptor.usage = .shaderRead
+        guard let texture = context(handle).device.makeTexture(descriptor: descriptor) else {
+            throw SurfaceError("Could not allocate a \(width)x\(height)x\(depth) image")
+        }
+        texture.replace(
+            region: MTLRegionMake3D(0, 0, 0, Int(width), Int(height), volume != 0 ? Int(depth) : 1), mipmapLevel: 0, slice: 0,
+            withBytes: bytes, bytesPerRow: Int(bytesPerRow), bytesPerImage: Int(bytesPerRow) * Int(height)
+        )
+        texture.label = label(name)
+        outTexture.pointee = retained(texture)
+        outView.pointee = retained(texture)
+    }
+}
+
 /// A view of some mip levels: all six faces for a cube map, otherwise the first layer.
 @_cdecl("mcn_texture_view_create")
 public func mcn_texture_view_create(
@@ -718,7 +753,8 @@ public func mcn_pass_set_texture(_ handle: Int, _ index: Int32, _ texture: Int, 
     let metalTexture: MTLTexture = object(texture)
     encoder.setVertexTexture(metalTexture, index: Int(index))
     encoder.setFragmentTexture(metalTexture, index: Int(index))
-    if sampler != 0 {
+    // Metal has 16 sampler slots; textures past them are sampled with a sampler of a lower index.
+    if sampler != 0 && index < 16 {
         let metalSampler: MTLSamplerState = object(sampler)
         encoder.setVertexSamplerState(metalSampler, index: Int(index))
         encoder.setFragmentSamplerState(metalSampler, index: Int(index))

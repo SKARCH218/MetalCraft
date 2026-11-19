@@ -153,6 +153,25 @@ internal class MetalDevice(private val defaultShaderSource: ShaderSource) : GpuD
         return MetalTexture(this, handleOut.get(JAVA_LONG, 0), usage, label ?: "", format, width, height, depthOrLayers, mipLevels)
     }
 
+    /**
+     * A read-only image filled from [pixels] (tightly packed rows of [format] texels, slice after slice): a
+     * volume when [volume] is set, otherwise two-dimensional. Shader packs bring such images as raw files.
+     */
+    fun createImage(label: String, format: GpuFormat, width: Int, height: Int, depth: Int, volume: Boolean, pixels: java.nio.ByteBuffer): MetalTextureView {
+        val bytesPerRow = pixels.remaining() / (height * depth)
+        java.lang.foreign.Arena.ofConfined().use { arena ->
+            val out = arena.allocate(JAVA_LONG, 2)
+            Mcn.check(
+                Mcn.imageCreate.invokeExact(
+                    context, MetalFormats.code(format), width, height, depth, if (volume) 1 else 0,
+                    MemorySegment.ofBuffer(pixels), bytesPerRow, MemorySegment.NULL, out, out.asSlice(8),
+                ) as Int,
+            )
+            val texture = MetalTexture(this, out.get(JAVA_LONG, 0), GpuTexture.USAGE_TEXTURE_BINDING, label, format, width, height, depth, 1)
+            return MetalTextureView(this, texture, out.get(JAVA_LONG, 8), 0, 1)
+        }
+    }
+
     override fun createTextureView(texture: GpuTexture): GpuTextureView = createTextureView(texture, 0, texture.mipLevels)
 
     override fun createTextureView(texture: GpuTexture, baseMipLevel: Int, mipLevels: Int): GpuTextureView {

@@ -78,7 +78,7 @@ internal class ConvertedPack(
         var needsAlt = false
     }
 
-    private class Image(val texture: MetalTexture, val view: MetalTextureView, val repeat: Boolean)
+    private class Image(val texture: MetalTexture, val view: MetalTextureView, val repeat: Boolean, val linear: Boolean = true, val volume: Boolean = false)
 
     /** Where one texture of a program comes from. */
     private class Slot(val entryName: String, val source: Int, val index: Int, val compare: Boolean, val image: Image?)
@@ -112,7 +112,7 @@ internal class ConvertedPack(
         val textures = entries.filter { it.kind == BindingEntry.TEXTURE }
         val description = ConvertedSpec.Program(
             label, "external", "", "",
-            textures.map { ConvertedSpec.Texture(it.name, Regex("depth2d<float> ${it.name}\\b").containsMatchIn(vertexMsl + fragmentMsl)) },
+            textures.map { ConvertedSpec.Texture(it.name, Regex("depth2d<float> ${it.name}\\b").containsMatchIn(vertexMsl + fragmentMsl), false) },
             targets, IntArray(0), -1f,
         )
         val slots = slots(description, "gbuffers")
@@ -156,6 +156,7 @@ internal class ConvertedPack(
     private val linear: MetalSampler
     private val nearest: MetalSampler
     private val linearRepeat: MetalSampler
+    private val nearestRepeat: MetalSampler
     private val shadowCompare: MetalSampler
 
     // The game binds the block atlas with a linear sampler and picks texels in its own terrain shader. A pack
@@ -191,7 +192,7 @@ internal class ConvertedPack(
      * (-1 here) and every buffer the world programs write follows.
      */
     private val attachments: IntArray = if (spec.primaryTarget) {
-        intArrayOf(0) + spec.gbuffers.filter { it != 0 }
+        intArrayOf(spec.primaryBuffer) + spec.gbuffers.filter { it != spec.primaryBuffer }
     } else {
         intArrayOf(-1) + spec.gbuffers
     }
@@ -262,6 +263,7 @@ internal class ConvertedPack(
         linear = sampler(AddressMode.CLAMP_TO_EDGE, FilterMode.LINEAR)
         nearest = sampler(AddressMode.CLAMP_TO_EDGE, FilterMode.NEAREST)
         linearRepeat = sampler(AddressMode.REPEAT, FilterMode.LINEAR)
+        nearestRepeat = sampler(AddressMode.REPEAT, FilterMode.NEAREST)
         shadowCompare = device.createShadowSampler()
         atlas = device.createSampler(
             AddressMode.CLAMP_TO_EDGE, AddressMode.CLAMP_TO_EDGE, FilterMode.NEAREST, FilterMode.NEAREST, 1, OptionalDouble.empty(),
@@ -281,7 +283,16 @@ internal class ConvertedPack(
         for (buffer in spec.buffers.values) colors[buffer.index] = Color(buffer)
 
         try {
-            for ((name, image) in spec.images) images[name] = loadImage(image)
+            for ((name, image) in spec.images) {
+                // Keyed by the buffer's current name, whichever the pack used.
+                val buffer = name.substringAfterLast('.')
+                val key = if (name.contains('.')) name.substringBeforeLast('.') + "." + (GAUX[buffer] ?: buffer) else name
+                try {
+                    images[key] = loadImage(image)
+                } catch (e: java.io.IOException) {
+                    LOGGER.warn("Shader pack '{}': image {} could not be read: {}", pack.id, image.file, e.message)
+                }
+            }
             // Packs that bring no noise image get random noise, as they would from an OpenGL shader loader.
             if ("noisetex" !in images) images["noisetex"] = defaultNoise()
             // The game has no normal or specular maps for its textures: flat, and nothing shiny.
@@ -371,7 +382,14 @@ internal class ConvertedPack(
     }
 
     private fun loadImage(image: ConvertedSpec.Image): Image {
-        val pixels = Files.newInputStream(pack.path(image.file)).use { NativeImage.read(it) }
+        if (image.format != null) return loadRawImage(image, image.format)
+        val stream = if (image.file.contains(':')) {
+            // A texture of the game or of a resource pack.
+            Minecraft.getInstance().resourceManager.open(net.minecraft.resources.Identifier.parse(image.file))
+        } else {
+            Files.newInputStream(pack.path(image.file))
+        }
+        val pixels = stream.use { NativeImage.read(it) }
         try {
             val texture = device.createTexture(
                 image.file, GpuTexture.USAGE_TEXTURE_BINDING or GpuTexture.USAGE_COPY_DST, GpuFormat.RGBA8_UNORM, pixels.width, pixels.height, 1, 1,
@@ -380,13 +398,51 @@ internal class ConvertedPack(
                 device.encoder.writeToTexture(
                     texture, MemoryUtil.memByteBuffer(pixels.pointer, pixels.width * pixels.height * 4), 0, 0, 0, 0, pixels.width, pixels.height,
                 )
-                return Image(texture, device.createTextureView(texture) as MetalTextureView, image.repeat)
+                return Image(texture, device.createTextureView(texture) as MetalTextureView, image.repeat, image.linear)
             } catch (e: Exception) {
                 texture.close()
                 throw e
             }
         } finally {
             pixels.close()
+        }
+    }
+
+    /** Raw texels as OpenGL would take them (`TEXTURE_2D` / `TEXTURE_3D`, an internal format, a pixel format and type). */
+    private fun loadRawImage(image: ConvertedSpec.Image, formatName: String): Image {
+        val format = ConvertedSpec.format(formatName)
+        val components = when (image.pixel) { "RED", "RED_INTEGER" -> 1; "RG", "RG_INTEGER" -> 2; "RGB", "RGB_INTEGER" -> 3; "RGBA", "RGBA_INTEGER" -> 4
+            else -> throw IllegalArgumentException("${image.file}: pixel format ${image.pixel} is not supported") }
+        val size = when (image.pixelType) { "UNSIGNED_BYTE", "BYTE" -> 1; "HALF_FLOAT", "UNSIGNED_SHORT", "SHORT" -> 2; "FLOAT", "UNSIGNED_INT", "INT" -> 4
+            else -> throw IllegalArgumentException("${image.file}: pixel type ${image.pixelType} is not supported") }
+        val stored = when {
+            format.name.startsWith("RGBA") || format.name.startsWith("RGB10") -> 4
+            format.name.startsWith("RG") && !format.name.startsWith("RG11") -> 2
+            format.name.startsWith("R") && !format.name.startsWith("RG") -> 1
+            else -> throw IllegalArgumentException("${image.file}: format $formatName is not supported for images")
+        }
+        val texels = image.width * image.height * image.depth
+        val bytes = Files.readAllBytes(pack.path(image.file))
+        require(bytes.size >= texels * components * size) { "${image.file} has ${bytes.size} bytes, ${texels * components * size} expected" }
+        require(components == stored || (components == 3 && stored == 4)) { "${image.file}: $components components do not fit $formatName" }
+        val pixels = MemoryUtil.memAlloc(texels * stored * size)
+        try {
+            if (components == stored) {
+                pixels.put(0, bytes, 0, texels * stored * size)
+            } else {
+                // Three components become four: Metal has no three-component formats. Alpha is one.
+                val one = when (image.pixelType) { "HALF_FLOAT" -> byteArrayOf(0x00, 0x3C); "FLOAT" -> byteArrayOf(0, 0, 0x80.toByte(), 0x3F)
+                    else -> ByteArray(size) { 0xFF.toByte() } }
+                val step = 3 * size
+                for (i in 0 until texels) {
+                    pixels.put(i * 4 * size, bytes, i * step, step)
+                    pixels.put(i * 4 * size + step, one, 0, size)
+                }
+            }
+            val view = device.createImage(image.file, format, image.width, image.height, image.depth, image.volume, pixels)
+            return Image(view.texture() as MetalTexture, view, image.repeat, image.linear, image.volume)
+        } finally {
+            MemoryUtil.memFree(pixels)
         }
     }
 
@@ -401,7 +457,9 @@ internal class ConvertedPack(
         val texture = program.textures[i]
         val name = GAUX[texture.name] ?: texture.name
         // A pack can put an image file in place of a buffer for one stage (`texture.<stage>.<name>`).
-        val image = images["$stage.${texture.name}"] ?: images[texture.name]
+        // The same buffer name can be a volume in one program and the plain buffer in the next.
+        val image = (images["$stage.$name"] ?: images[texture.name])?.takeIf { it.volume == texture.volume }
+        if (texture.volume && image == null) throw IllegalArgumentException("${program.name} reads the volume '${texture.name}', which the pack has no image for")
         when {
             image != null -> Slot(texture.name, SOURCE_IMAGE, 0, false, image)
             name in ATLAS_NAMES -> Slot("Sampler0", SOURCE_GAME, 0, false, null)
@@ -451,7 +509,7 @@ internal class ConvertedPack(
             entries(slots, PACK_UNIFORMS_ENTRY, DRAW_UNIFORMS_ENTRY, geometryBlock)
         }
         val compiled = PackProgram(
-            device, "${pack.id}/$label", pack.read(program.vertex), pack.read(program.fragment), buffers, format,
+            device, "${pack.id}/$label", shareSamplers(pack.read(program.vertex), program, slots), shareSamplers(pack.read(program.fragment), program, slots), buffers, format,
             formats, masks, blend, depthCompare, depthWrite, if (cull) 1 else 0, blendFunction, fastMath = true,
         )
         return Program(program, register(compiled, DEPTH_FORMAT), slots, "gbuffers")
@@ -514,7 +572,7 @@ internal class ConvertedPack(
         val slots = slots(program, "shadow")
         val formats = IntArray(program.targets.size) { MetalFormats.code(GpuFormat.RGBA8_UNORM) }
         val compiled = PackProgram(
-            device, "${pack.id}/shadow", pack.read(program.vertex), pack.read(program.fragment),
+            device, "${pack.id}/shadow", shareSamplers(pack.read(program.vertex), program, slots), shareSamplers(pack.read(program.fragment), program, slots),
             entries(slots, PACK_UNIFORMS_ENTRY, DRAW_UNIFORMS_ENTRY, CHUNK_SECTION_ENTRY, GLOBALS_ENTRY), TerrainVertexFormat.FORMAT,
             formats, IntArray(formats.size) { WRITE_ALL }, 0, COMPARE_LESS_EQUAL, true, 0, fastMath = true,
         )
@@ -528,7 +586,8 @@ internal class ConvertedPack(
             MetalFormats.code(if (program.name == FINAL) GpuFormat.RGBA8_UNORM else color(program.targets[it]).spec.format)
         }
         val compiled = PackProgram(
-            device, "${pack.id}/${program.name}", pack.read(program.vertex), pack.read(program.fragment), entries(slots, PACK_UNIFORMS_ENTRY), null,
+            device, "${pack.id}/${program.name}", shareSamplers(pack.read(program.vertex), program, slots), shareSamplers(pack.read(program.fragment), program, slots),
+            entries(slots, PACK_UNIFORMS_ENTRY), null,
             formats, IntArray(formats.size) { WRITE_ALL }, 0, -1, false, 0, fastMath = true,
         )
         return Program(program, register(compiled, MetalFormats.NO_FORMAT), slots, stage)
@@ -550,7 +609,7 @@ internal class ConvertedPack(
     /** The pack's buffers the world programs write, for passes that draw into [mainColor]. */
     fun gbuffer(mainColor: GpuTexture): ShaderPipeline.Gbuffer {
         for (i in gbufferHandles.indices) gbufferHandles[i] = color(attachments[i + 1]).view!!.handle
-        val primary = if (spec.primaryTarget) color(0).view!!.handle else 0L
+        val primary = if (spec.primaryTarget) color(spec.primaryBuffer).view!!.handle else 0L
         val existing = gbufferState
         if (existing != null && existing.mainColor === mainColor) {
             existing.primary = primary
@@ -735,11 +794,41 @@ internal class ConvertedPack(
         for (slot in program.slots) bindSlot(pass, slot)
     }
 
+    private fun imageSampler(image: Image): MetalSampler =
+        if (image.linear) { if (image.repeat) linearRepeat else linear } else { if (image.repeat) nearestRepeat else nearest }
+
+    /** The sampler [slot] is bound with, or null for the block atlas (the game binds that). */
+    private fun samplerOf(slot: Slot): MetalSampler? = when (slot.source) {
+        SOURCE_GAME -> null
+        SOURCE_IMAGE -> imageSampler(slot.image!!)
+        SOURCE_DEPTH0, SOURCE_DEPTH1 -> nearest
+        SOURCE_SHADOW_DEPTH -> if (slot.compare) shadowCompare else nearest
+        else -> linear
+    }
+
+    /**
+     * Metal has 31 texture slots but 16 for samplers. In a program with more textures, those past the 16th
+     * are sampled with the sampler of an earlier texture that is bound with the same one.
+     */
+    private fun shareSamplers(msl: String, program: ConvertedSpec.Program, slots: Array<Slot>): String {
+        if (slots.size <= MAX_SAMPLERS) return msl
+        var text = msl
+        for (i in MAX_SAMPLERS until slots.size) {
+            val sampler = samplerOf(slots[i])
+            val other = (0 until MAX_SAMPLERS).firstOrNull { sampler != null && samplerOf(slots[it]) === sampler }
+                ?: throw IllegalArgumentException("${program.name} uses ${slots.size} textures and '${program.textures[i].name}' has no sampler to share")
+            val name = program.textures[i].name
+            text = text.replace(Regex(""",\s*sampler ${name}Smplr \[\[sampler\(\d+\)]]"""), "")
+                .replace(Regex("""\b${name}Smplr\b"""), program.textures[other].name + "Smplr")
+        }
+        return text
+    }
+
     private fun bindSlot(pass: MetalRenderPass, slot: Slot) {
         run {
             when (slot.source) {
                 SOURCE_GAME -> {}
-                SOURCE_IMAGE -> pass.bindTexture(slot.entryName, slot.image!!.view, if (slot.image.repeat) linearRepeat else linear)
+                SOURCE_IMAGE -> pass.bindTexture(slot.entryName, slot.image!!.view, imageSampler(slot.image))
                 SOURCE_COLOR -> pass.bindTexture(slot.entryName, color(slot.index).view!!, linear)
                 SOURCE_COLOR_SNAPSHOT -> pass.bindTexture(slot.entryName, color(slot.index).altView ?: color(slot.index).view!!, linear)
                 SOURCE_DEPTH0 -> pass.bindTexture(slot.entryName, depth0View!!, nearest)
@@ -882,6 +971,7 @@ internal class ConvertedPack(
         integers("atlasSize", atlas.getWidth(0), atlas.getHeight(0))
         val fog = camera.fogData
         vector("fogColor", fog.color.x, fog.color.y, fog.color.z)
+        vector("mc_fogColor", fog.color.x, fog.color.y, fog.color.z, 1f)
         vector("skyColor", (sky.skyColor shr 16 and 0xFF) / 255f, (sky.skyColor shr 8 and 0xFF) / 255f, (sky.skyColor and 0xFF) / 255f)
         float("fogStart", fog.renderDistanceStart)
         float("fogEnd", fog.renderDistanceEnd)
@@ -1131,6 +1221,7 @@ internal class ConvertedPack(
         shadowDepthAllView.close()
         shadowDepthAll.close()
         linear.close()
+        nearestRepeat.close()
         nearest.close()
         linearRepeat.close()
         shadowCompare.close()
@@ -1162,6 +1253,7 @@ internal class ConvertedPack(
 
         const val SOURCE_GAME = 0
         const val SOURCE_IMAGE = 1
+        const val MAX_SAMPLERS = 16
         const val SOURCE_COLOR = 2
         const val SOURCE_DEPTH0 = 3
         const val SOURCE_DEPTH1 = 4

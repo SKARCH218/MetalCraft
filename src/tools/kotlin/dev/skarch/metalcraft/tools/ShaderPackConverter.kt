@@ -82,13 +82,16 @@ private val OPTION_LINE = Regex("""^(\s*#define\s+(\w+)\s+)(\S+)(\s*//\s*\[.*)$"
 private val INTERFACE_LINE = Regex(
     """^\s*((?:(?:flat|smooth|noperspective|centroid|invariant)\s+)*)(in|out)\s+((?:(?:flat|smooth|noperspective|centroid|highp|mediump|lowp)\s+)*)(\w+)\s+([^;(){}=]+);\s*$""",
 )
-private val CONSTANT_LINE = Regex("""(?m)^\s*const\s+\w+\s+(\w+)\s*=""")
+private val CONSTANT_LINE = Regex("""(?m)^(?:[ \t]*const[ \t]+\w+[ \t]+(\w+)[ \t]*=|(?:bool|int|float|i?vec[234]|mat[34])\s+(\w+)\s*[=;])""")
+private val NEWER_BUILTINS = listOf("tanh", "sinh", "cosh", "asinh", "acosh", "atanh", "round", "roundEven", "trunc", "isnan", "isinf", "fma", "inverse", "transpose", "determinant", "modf", "saturate")
+private val STRUCT = Regex("""struct\s+(\w+)\s*\{([^}]*)}""")
+private val UNDECLARED = Regex("""'(\w+)' : undeclared identifier""")
 private val MATRIX_TYPE = Regex("""d?mat(\d)(?:x\d)?""")
 
 /** A fragment output a pack declares itself instead of writing gl_FragData. */
 private val PACK_OUTPUT = Regex("""(?m)^[ \t]*layout\s*\(\s*location\s*=\s*(\d+)\s*\)\s*out\s+(\w+)\s+(\w+)\s*;""")
 private val INCLUDE_LINE = Regex("""^\s*#include\s+"([^"]+)"""")
-private val PACK_ATTRIBUTE = Regex("""^\s*(attribute|in)\s+vec[234]\s+(mc_Entity|mc_midTexCoord|at_tangent|at_midBlock)\s*;.*$""")
+private val PACK_ATTRIBUTE = Regex("""^\s*(?:attribute|in)\s+((?:[iu]?vec[234])|float|int)\s+(mc_Entity|mc_midTexCoord|at_tangent|at_midBlock)\s*;.*$""")
 private val TARGETS_COMMENT = Regex("""/\*\s*(DRAWBUFFERS|RENDERTARGETS)\s*:\s*([0-9,\s]+?)\s*\*/""")
 private val TARGETS_MARKER = Regex("""const int mc_targets((?:_\d+)+) = 0;""")
 private val FRAG_DATA = Regex("""gl_FragData\s*\[\s*(\d+)\s*]""")
@@ -139,7 +142,7 @@ private val LEGACY_BUFFERS = mapOf(
 private val SHADOW_CONSTANT = Regex("""const\s+(?:int|float)\s+(shadowMapResolution|shadowDistance|sunPathRotation)\s*=\s*(-?[0-9.]+)\s*;""")
 
 /** Members the engine needs in the block besides the pack's own uniforms. */
-private val ENGINE_UNIFORMS = listOf("vec4" to "mc_fog", "mat4" to "mc_bob")
+private val ENGINE_UNIFORMS = listOf("vec4" to "mc_fog", "mat4" to "mc_bob", "vec4" to "mc_fogColor")
 
 /** Uniforms the converter's own code refers to. They are in every pack's block, declared by the pack or not. */
 private val PRELUDE_UNIFORMS = listOf("gbufferModelView", "gbufferProjection", "shadowModelView", "shadowProjection")
@@ -153,7 +156,14 @@ private val DIMENSION_FOLDERS = listOf("world0", "world-1", "world1")
 
 /** The game version the pack is converted for, as Iris numbers it (1.21.11). */
 private const val MC_VERSION = 12111
-private val VERSION_CONDITION = Regex("""#if\s+MC_VERSION\s*(>=|>|<=|<|==)\s*(\d+)""")
+private val PROPERTY_DIRECTIVE = Regex("""#(ifdef|ifndef|if|elif|else|endif|define|undef)\b(.*)""")
+private val CONDITION_TOKEN = Regex("""\d+|\w+|&&|\|\||[=!<>]=|[-!<>()]""")
+private val COMPARISONS = setOf("==", "!=", ">=", "<=", ">", "<")
+private val PROGRAM_ENABLED = Regex("""program\.([\w/-]+)\.enabled\s*=\s*(.+)""")
+private val TEXTURE_PROPERTY = Regex("""(texture|customTexture)\.([\w.]+)\s*=\s*(.+)""")
+private val WORD = Regex("""\b[A-Za-z_]\w*\b""")
+private val OPTION_DEFINE = Regex("""\s*(//)?\s*#define\s+(\w+)[ \t]*([^\s/]*).*""")
+private val OPTION_FILES = setOf("glsl", "fsh", "vsh", "csh", "gsh", "h", "inc", "settings", "frag", "vert")
 
 /**
  * `<pack> [output folder] [port settings json]`. The pack is a shader pack zip, its unpacked folder or the
@@ -240,7 +250,9 @@ private class Converter(private val source: Path, private val output: Path, priv
             }
             for ((name, file) in files) {
                 val kind = kindOf(name)
-                if (kind == null) {
+                if (file in disabledPrograms || "$folder/$file" in disabledPrograms) {
+                    println("off     $folder/$name (disabled by the pack's options)")
+                } else if (kind == null) {
                     skipped.add(name)
                 } else {
                     assembling = HashSet()
@@ -317,17 +329,21 @@ private class Converter(private val source: Path, private val output: Path, priv
         }
         // World programs share one set of attachments: the game's image, then every target any of them writes.
         val gbufferTargets = finished.filter { it.key.kind.world }.flatMap { it.value.second.targets }.toSortedSet().toList()
-        // colortex0 is the first attachment of the world passes; the other buffers they write follow it.
-        val extraTargets = gbufferTargets.filter { it != 0 }
+        // One buffer is the first attachment of the world passes (where the game's image would be); the other
+        // buffers they write follow it. It is colortex0 unless leaving that out is what makes the rest fit.
+        val primary = if (0 in gbufferTargets || gbufferTargets.size < MAX_ATTACHMENTS) 0 else gbufferTargets.first()
+        val extraTargets = gbufferTargets.filter { it != primary }
 
         val manifestPrograms = JsonObject()
         val shadowConstants = HashMap<String, String>()
-        for ((program, stages) in finished) {
-            try {
+        for ((program, firstStages) in finished) {
+            var stages = firstStages
+            var attempt = 0
+            while (true) try {
                 val targets = stages.second.targets
                 val locations = when {
                     !program.kind.world -> targets.indices.toList()
-                    else -> targets.map { if (it == 0) 0 else 1 + extraTargets.indexOf(it) }
+                    else -> targets.map { if (it == primary) 0 else 1 + extraTargets.indexOf(it) }
                 }
                 val linked = link(stages.first.text, stages.second.text)
                 val vertexGlsl = linked.first
@@ -358,6 +374,7 @@ private class Converter(private val source: Path, private val output: Path, priv
                                     it.addProperty("name", texture)
                                     // A sampler2DShadow: the engine binds it with a comparing sampler.
                                     it.addProperty("compare", Regex("depth2d<float> $texture\\b").containsMatchIn(translated.vertexMsl + translated.fragmentMsl))
+                                    it.addProperty("volume", Regex("texture3d<float> $texture\\b").containsMatchIn(translated.vertexMsl + translated.fragmentMsl))
                                 })
                             }
                         })
@@ -372,14 +389,31 @@ private class Converter(private val source: Path, private val output: Path, priv
                 } finally {
                     MemoryUtil.memFree(vertexSpirv)
                 }
+                break
             } catch (e: ConvertException) {
-                failures++
-                report(program, e)
+                // A pack may use a standard uniform a stage never declares (a driver that tolerates it, or a
+                // declaration another stage has): give the program the engine's and try again.
+                val missing = UNDECLARED.findAll(e.message ?: "").map { it.groupValues[1] }
+                    .filter { name -> name !in program.uniformNames && uniforms.members.any { it.name == name } }.toSet()
+                if (missing.isEmpty() || attempt++ >= 3) {
+                    failures++
+                    report(program, e)
+                    break
+                }
+                program.uniformNames.addAll(missing)
+                try {
+                    stages = finish(program, Stage.VERTEX, program.vertex, uniforms) to finish(program, Stage.FRAGMENT, program.fragment, uniforms)
+                } catch (again: ConvertException) {
+                    failures++
+                    report(program, again)
+                    break
+                }
             }
         }
 
         val manifest = JsonObject()
         manifest.add("gbuffers", JsonArray().also { array -> gbufferTargets.forEach(array::add) })
+        manifest.addProperty("primaryBuffer", primary)
         manifest.add("shadow", JsonObject().also {
             it.addProperty("resolution", shadowConstants["shadowMapResolution"]?.toInt() ?: 1024)
             it.addProperty("distance", shadowConstants["shadowDistance"]?.toFloat() ?: 160f)
@@ -497,52 +531,239 @@ private class Converter(private val source: Path, private val output: Path, priv
         val file = source.resolve(name)
         if (!file.exists()) return null
         val result = StringBuilder()
-        val active = ArrayDeque<Boolean>()
-        for (line in Files.readAllLines(file)) {
-            val trimmed = line.trim()
-            val condition = VERSION_CONDITION.matchEntire(trimmed)
-            when {
-                condition != null -> {
-                    val value = condition.groupValues[2].toInt()
-                    active.addLast(
-                        when (condition.groupValues[1]) {
-                            ">=" -> MC_VERSION >= value
-                            ">" -> MC_VERSION > value
-                            "<=" -> MC_VERSION <= value
-                            "<" -> MC_VERSION < value
-                            else -> MC_VERSION == value
-                        },
-                    )
-                }
-                trimmed.startsWith("#if") -> throw ConvertException("$name: unsupported condition '$trimmed'")
-                trimmed.startsWith("#else") -> active.addLast(!active.removeLast())
-                trimmed.startsWith("#endif") -> active.removeLast()
-                trimmed.startsWith("#") || trimmed.isEmpty() -> {}
-                active.all { it } && trimmed.startsWith(prefix) -> result.append(trimmed).append('\n')
-            }
+        val macros = HashMap(packDefines)
+        for (line in activeLines(file, macros)) {
+            if (!line.startsWith(prefix)) continue
+            var text = line
+            // Macros may expand to other macros (Photon's tag lists).
+            repeat(4) { text = WORD.replace(text) { macros[it.value] ?: it.value } }
+            result.append(text).append('\n')
         }
         Files.writeString(output.resolve(outputName), result.toString())
         return outputName
     }
 
-    /** Image files the pack binds in place of buffers; they are copied next to the converted shaders. */
-    private fun textures(): JsonObject {
-        val result = JsonObject()
-        val declared = port.getAsJsonObject("textures") ?: return result
-        for ((name, value) in declared.entrySet()) {
-            val file = value.asJsonObject.get("file").asString
-            val target = output.resolve("textures").resolve(Path.of(file).name)
-            Files.createDirectories(target.parent)
-            Files.copy(source.resolve(file), target, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-            result.add(name, JsonObject().also {
-                it.addProperty("file", "textures/" + target.name)
-                it.addProperty("repeat", value.asJsonObject.get("repeat")?.asBoolean ?: false)
-            })
+    /** The lines of a property file its `#if` blocks leave in, trimmed. [macros] collects the file's `#define`s. */
+    private fun activeLines(file: Path, macros: MutableMap<String, String>): List<String> {
+        val result = ArrayList<String>()
+        // One frame per open #if: [the enclosing block is active, a branch was already taken, this branch is active].
+        val frames = ArrayDeque<BooleanArray>()
+        fun active() = frames.all { it[2] }
+        fun open(condition: Boolean) {
+            val outer = active()
+            frames.addLast(booleanArrayOf(outer, outer && condition, outer && condition))
+        }
+        for (line in Files.readAllLines(file)) {
+            val trimmed = line.trim()
+            val directive = PROPERTY_DIRECTIVE.matchEntire(trimmed)
+            when {
+                directive != null -> {
+                    val argument = directive.groupValues[2].trim()
+                    when (directive.groupValues[1]) {
+                        "ifdef" -> open(argument in macros)
+                        "ifndef" -> open(argument !in macros)
+                        "if" -> open(Condition(argument, macros).evaluate() != 0L)
+                        "elif" -> frames.lastOrNull()?.let {
+                            val now = it[0] && !it[1] && Condition(argument, macros).evaluate() != 0L
+                            it[2] = now
+                            it[1] = it[1] || now
+                        }
+                        "else" -> frames.lastOrNull()?.let {
+                            it[2] = it[0] && !it[1]
+                            it[1] = true
+                        }
+                        "endif" -> frames.removeLastOrNull()
+                        "define" -> if (active()) {
+                            val parts = argument.split(Regex("\\s+"), 2)
+                            macros[parts[0]] = parts.getOrElse(1) { "" }
+                        }
+                        "undef" -> if (active()) macros.remove(argument)
+                    }
+                }
+                trimmed.startsWith("#") || trimmed.isEmpty() -> {}
+                active() -> result.add(trimmed)
+            }
         }
         return result
     }
 
-    private class Program(val name: String, val kind: Kind, val vertex: String, val fragment: String, val uniformNames: Set<String>)
+    /**
+     * The programs the pack switches off (`program.<name>.enabled = <condition on its options>` in
+     * shaders.properties), as `<folder>/<name>` or just `<name>`.
+     */
+    private val disabledPrograms: Set<String> by lazy {
+        val file = source.resolve("shaders.properties")
+        val result = HashSet<String>()
+        if (file.exists()) {
+            val macros = HashMap(packDefines)
+            for (line in activeLines(file, macros)) {
+                val match = PROGRAM_ENABLED.matchEntire(line) ?: continue
+                if (Condition(match.groupValues[2], macros, flags = true).evaluate() == 0L) result.add(match.groupValues[1])
+            }
+        }
+        result
+    }
+
+    /**
+     * The macros a pack's property files can test: the defaults of its options (`#define NAME value` anywhere in
+     * the pack, `//#define NAME` meaning off), the port's overrides and the game version.
+     */
+    private val packDefines: Map<String, String> by lazy {
+        val defines = HashMap<String, String>()
+        val off = HashSet<String>()
+        Files.walk(source).use { files ->
+            for (file in files) {
+                if (!Files.isRegularFile(file) || file.name.substringAfterLast('.') !in OPTION_FILES) continue
+                val lines = try { Files.readAllLines(file) } catch (e: java.io.IOException) { continue }
+                for (line in lines) {
+                    val match = OPTION_DEFINE.matchEntire(line) ?: continue
+                    if (match.groupValues[1].isEmpty()) defines.putIfAbsent(match.groupValues[2], match.groupValues[3])
+                    else off.add(match.groupValues[2])
+                }
+            }
+        }
+        for (name in off) defines.remove(name)
+        port.getAsJsonObject("options")?.entrySet()?.forEach { (name, value) ->
+            when (value.asString) {
+                "false" -> defines.remove(name)
+                "true" -> defines[name] = ""
+                else -> defines[name] = value.asString
+            }
+        }
+        defines["MC_VERSION"] = MC_VERSION.toString()
+        defines
+    }
+
+    /** A preprocessor condition: integers, macros, `defined`, `!`, comparisons, `&&`, `||` and parentheses. */
+    private class Condition(text: String, private val macros: Map<String, String>, private val flags: Boolean = false) {
+        private val tokens = CONDITION_TOKEN.findAll(text).map { it.value }.toList()
+        private var at = 0
+
+        fun evaluate(): Long = or()
+
+        private fun peek() = tokens.getOrNull(at)
+        private fun or(): Long {
+            var value = and()
+            while (peek() == "||") { at++; val right = and(); value = if (value != 0L || right != 0L) 1 else 0 }
+            return value
+        }
+        private fun and(): Long {
+            var value = compare()
+            while (peek() == "&&") { at++; val right = compare(); value = if (value != 0L && right != 0L) 1 else 0 }
+            return value
+        }
+        private fun compare(): Long {
+            val left = unary()
+            val operator = peek()
+            if (operator !in COMPARISONS) return left
+            at++
+            val right = unary()
+            val result = when (operator) {
+                "==" -> left == right
+                "!=" -> left != right
+                ">=" -> left >= right
+                "<=" -> left <= right
+                ">" -> left > right
+                else -> left < right
+            }
+            return if (result) 1 else 0
+        }
+        private fun unary(): Long {
+            val token = tokens.getOrNull(at++) ?: return 0
+            return when {
+                token == "!" -> if (unary() == 0L) 1 else 0
+                token == "-" -> -unary()
+                token == "(" -> or().also { at++ }
+                token == "defined" -> {
+                    val parenthesised = peek() == "("
+                    if (parenthesised) at++
+                    val name = tokens.getOrNull(at++)
+                    if (parenthesised) at++
+                    if (name in macros) 1 else 0
+                }
+                token[0].isDigit() -> token.toLongOrNull() ?: 0
+                token == "true" -> 1
+                token == "false" -> 0
+                // In shaders.properties a name stands for whether the option is on.
+                flags -> if (token in macros) 1 else 0
+                else -> macros[token]?.trim()?.toLongOrNull() ?: 0
+            }
+        }
+    }
+
+    /**
+     * Image files the pack binds in place of buffers (`texture.<stage>.<buffer>`, `texture.noise` and
+     * `customTexture.<name>` in shaders.properties, or the port's `textures`, which win). They are copied next
+     * to the converted shaders. Keys are `<stage>.<buffer>`, `noisetex` or the sampler's name.
+     */
+    private fun textures(): JsonObject {
+        val result = JsonObject()
+        fun add(key: String, file: String, raw: List<String>, repeat: Boolean?, linear: Boolean?) {
+            val entry = JsonObject()
+            var blur = raw.isNotEmpty()
+            var clamp = false
+            if (file.contains(':')) {
+                // A texture of the game: the engine reads it from the resource packs.
+                entry.addProperty("file", file)
+            } else {
+                val path = source.resolve(file.removePrefix("/"))
+                if (!path.exists()) {
+                    println("warning: $key names $file, which the pack does not have")
+                    return
+                }
+                val target = output.resolve("textures").resolve(path.name)
+                Files.createDirectories(target.parent)
+                Files.copy(path, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                entry.addProperty("file", "textures/" + target.name)
+                val meta = path.resolveSibling(path.name + ".mcmeta")
+                if (meta.exists()) {
+                    val text = Files.readString(meta)
+                    Regex(""""blur"\s*:\s*(true|false)""").find(text)?.let { blur = it.groupValues[1] == "true" }
+                    Regex(""""clamp"\s*:\s*(true|false)""").find(text)?.let { clamp = it.groupValues[1] == "true" }
+                }
+            }
+            entry.addProperty("repeat", repeat ?: !clamp)
+            entry.addProperty("linear", linear ?: blur)
+            if (raw.isNotEmpty()) {
+                // TEXTURE_3D RGB8 64 64 64 RGB UNSIGNED_BYTE: type, internal format, size, pixel format, pixel type.
+                val sizes = raw.drop(2).takeWhile { it.toIntOrNull() != null }.map { it.toInt() }
+                val rest = raw.drop(2 + sizes.size)
+                if (raw[0] !in setOf("TEXTURE_2D", "TEXTURE_3D") || sizes.size < 2 || rest.size < 2) {
+                    println("warning: $key has a texture definition that is not understood: $raw")
+                    return
+                }
+                entry.addProperty("volume", raw[0] == "TEXTURE_3D")
+                entry.addProperty("format", raw[1])
+                entry.addProperty("width", sizes[0])
+                entry.addProperty("height", sizes[1])
+                entry.addProperty("depth", sizes.getOrElse(2) { 1 })
+                entry.addProperty("pixel", rest[0])
+                entry.addProperty("pixelType", rest[1])
+            }
+            result.add(key, entry)
+        }
+        port.getAsJsonObject("textures")?.entrySet()?.forEach { (name, value) ->
+            add(name, value.asJsonObject.get("file").asString, emptyList(), value.asJsonObject.get("repeat")?.asBoolean ?: false, true)
+        }
+        val properties = source.resolve("shaders.properties")
+        if (properties.exists()) {
+            for (line in activeLines(properties, HashMap(packDefines))) {
+                val match = TEXTURE_PROPERTY.matchEntire(line) ?: continue
+                val words = match.groupValues[3].trim().split(Regex("\\s+"))
+                val key = when {
+                    match.groupValues[1] == "customTexture" -> match.groupValues[2]
+                    match.groupValues[2] == "noise" -> "noisetex"
+                    // texture.deferred.colortex6.1: a trailing number is not part of the name.
+                    else -> match.groupValues[2].replace(Regex("""\.\d+$"""), "")
+                }
+                if (port.getAsJsonObject("textures")?.has(key) == true) continue
+                add(key, words[0], words.drop(1), null, null)
+            }
+        }
+        return result
+    }
+
+    private class Program(val name: String, val kind: Kind, val vertex: String, val fragment: String, val uniformNames: MutableSet<String>)
 
     private fun kindOf(program: String): Kind? = when {
         program == "shadow" -> Kind.SHADOW
@@ -569,7 +790,11 @@ private class Converter(private val source: Path, private val output: Path, priv
             val trimmed = line.trimStart()
             when {
                 trimmed.startsWith("#version") || trimmed.startsWith("#extension") -> result.append('\n')
-                PACK_ATTRIBUTE.matches(line) -> result.append('\n')
+                PACK_ATTRIBUTE.matches(line) -> {
+                    val (type, name) = PACK_ATTRIBUTE.matchEntire(line)!!.destructured
+                    if (type != "vec4") result.append("#undef $name\n#define $name $type(mc_in_$name)")
+                    result.append('\n')
+                }
                 else -> {
                     val uniform = UNIFORM_LINE.matchEntire(line)
                     if (uniform != null) {
@@ -708,10 +933,18 @@ private class Converter(private val source: Path, private val output: Path, priv
             else -> ""
         } + "}\n"
         var text = preprocess("${program.name}.${stage.extension}", prelude.toString() + body + epilogue, stage)
+        // Functions that became built-ins after the GLSL the pack was written in: the pack's own keep working
+        // under another name.
+        for (name in NEWER_BUILTINS) {
+            if (!text.contains(name)) continue
+            if (Regex("""(?m)^[ \t]*(?:float|vec[234]|mat[234]|int|bool)[ \t]+$name[ \t]*\([^;{]*\)\s*\{""").containsMatchIn(text)) {
+                text = text.replace(Regex("""\b$name\b"""), "mc_pack_$name")
+            }
+        }
         // A name can be a uniform under one pack option and a constant under another. Where the constant is
         // what survived the preprocessor, the uniform gives up the name.
         if (constants.isEmpty()) {
-            val clashing = CONSTANT_LINE.findAll(text).map { it.groupValues[1] }.filter { it in program.uniformNames }.toSet()
+            val clashing = CONSTANT_LINE.findAll(text).map { it.groupValues[1].ifEmpty { it.groupValues[2] } }.filter { it in program.uniformNames }.toSet()
             if (clashing.isNotEmpty()) return finish(program, stage, body, uniforms, clashing)
         }
 
@@ -720,6 +953,13 @@ private class Converter(private val source: Path, private val output: Path, priv
             val markers = TARGETS_MARKER.findAll(text).toList()
             if (markers.isNotEmpty()) targets = markers.last().groupValues[1].trim('_').split('_').map { it.toInt() }
             text = TARGETS_MARKER.replace(text, "")
+            // A program that writes no output at all (an empty main, say) has no targets. The alpha test added
+            // above is the one mention of gl_FragData that is not the pack's.
+            val mentions = FRAG_DATA.findAll(text).count() - (if (program.kind != Kind.FULLSCREEN) 1 else 0)
+            if (markers.isEmpty() && mentions == 0 && !PACK_OUTPUT.containsMatchIn(text)) {
+                text = text.replace(Regex("""[ \t]*if \(!\s*\(gl_FragData\s*\[\s*0\s*]\.a > mc_alphaTestRef\)\) discard;\n"""), "")
+                return Finished(text, emptyList())
+            }
             val used = FRAG_DATA.findAll(text).map { it.groupValues[1].toInt() }.toSortedSet()
             if (used.isNotEmpty() && used.last() >= targets.size) {
                 throw ConvertException("writes gl_FragData[${used.last()}] but declares only ${targets.size} targets")
@@ -733,6 +973,8 @@ private class Converter(private val source: Path, private val output: Path, priv
                 val index = it.groupValues[1].toInt()
                 val type = it.groupValues[2]
                 val name = it.groupValues[3]
+                // An output past the end of the pack's target list goes nowhere.
+                if (markers.isNotEmpty() && index >= targets.size) return@replace "$type $name;"
                 own[index] = type to name
                 // Metal wants an output as wide as its attachment: narrower ones are filled up at the end.
                 val fill = when (type) { "float" -> ", 0.0, 0.0, 1.0"; "vec2" -> ", 0.0, 1.0"; "vec3" -> ", 1.0"; else -> null }
@@ -756,7 +998,7 @@ private class Converter(private val source: Path, private val output: Path, priv
                 text = when {
                     first == null -> text
                     first.first == "vec4" -> text.replace("mc_FragData_0", first.second)
-                    else -> text.replace(Regex("""[ \t]*if \(!\(mc_FragData_0\.a > mc_alphaTestRef\)\) discard;\n"""), "")
+                    else -> text.replace(Regex("""[ \t]*if \(!\s*\(mc_FragData_0\.a > mc_alphaTestRef\)\) discard;\n"""), "")
                 }
             }
             return Finished(text, targets, own)
@@ -771,6 +1013,21 @@ private class Converter(private val source: Path, private val output: Path, priv
     private fun link(vertex: String, fragment: String): Pair<String, String> {
         val locations = LinkedHashMap<String, Int>()
         var next = 0
+        // A struct takes one location per member (more for matrices and arrays).
+        val structs = HashMap<String, Int>()
+        fun slotsOf(type: String): Int = structs[type] ?: MATRIX_TYPE.matchEntire(type)?.groupValues?.get(1)?.toInt() ?: 1
+        for (match in STRUCT.findAll(vertex)) {
+            var slots = 0
+            for (member in match.groupValues[2].split(';')) {
+                val words = member.trim().split(Regex("\\s+"), 2)
+                if (words.size < 2) continue
+                for (declarator in splitTopLevel(words[1])) {
+                    val count = declarator.substringAfter('[', "").substringBefore(']').trim().toIntOrNull() ?: 1
+                    slots += count * slotsOf(words[0])
+                }
+            }
+            structs[match.groupValues[1]] = slots
+        }
         fun rewrite(text: String, direction: String): String {
             val result = StringBuilder(text.length + 1024)
             for (line in text.lineSequence()) {
@@ -790,7 +1047,7 @@ private class Converter(private val source: Path, private val output: Path, priv
                         1
                     }
                     // A matrix takes one location per column: mat3, mat2x2, mat4x3 ...
-                    val slots = count * (MATRIX_TYPE.matchEntire(type)?.groupValues?.get(1)?.toInt() ?: 1)
+                    val slots = count * slotsOf(type)
                     val location = locations.getOrPut(name) { next.also { next += slots } }
                     result.append("layout(location = ").append(location).append(") ")
                     if (qualifiers.isNotEmpty()) result.append(qualifiers).append(' ')
@@ -868,7 +1125,7 @@ private class Converter(private val source: Path, private val output: Path, priv
                 // Textures get one index each, shared by both stages, in the order they are first used.
                 val textures = ArrayList<String>()
                 for (image in vertex.images + fragment.images) if (image.name !in textures) textures.add(image.name)
-                if (textures.size > MAX_TEXTURES) throw ConvertException("uses ${textures.size} textures, Metal allows $MAX_TEXTURES samplers: $textures")
+                if (textures.size > MAX_TEXTURES) throw ConvertException("uses ${textures.size} textures, Metal allows $MAX_TEXTURES: $textures")
                 for (stage in listOf(vertex, fragment)) {
                     for (buffer in stage.uniformBuffers) {
                         val index = BUFFER_INDICES[buffer.name] ?: throw ConvertException("unknown uniform block ${buffer.name}")
@@ -980,8 +1237,11 @@ private class Converter(private val source: Path, private val output: Path, priv
         const val DECORATION_BINDING = 33
         const val DECORATION_DESCRIPTOR_SET = 34
 
-        /** Metal allows 16 samplers per stage. */
-        const val MAX_TEXTURES = 16
+        /** Metal allows 31 textures per stage. Past 16 the engine makes textures share samplers. */
+        const val MAX_TEXTURES = 31
+
+        /** Metal allows 8 colour attachments per pass. */
+        const val MAX_ATTACHMENTS = 8
 
         /** MSL 2.3 (macOS 11), encoded as major * 10000 + minor * 100. */
         const val MSL_VERSION = 20300
@@ -1001,6 +1261,8 @@ private class Converter(private val source: Path, private val output: Path, priv
             #define MC_SHADOW_QUALITY 1.0
             #define MC_HAND_DEPTH 0.125
             #define IS_IRIS
+            #define MC_NORMAL_MAP
+            #define MC_SPECULAR_MAP
             #define IRIS_VERSION 11000
             #define MC_RENDER_STAGE_NONE 0
             #define MC_RENDER_STAGE_SKY 1
@@ -1041,12 +1303,19 @@ private class Converter(private val source: Path, private val output: Path, priv
             vec4 mc_shadow2DLod(sampler2DShadow s, vec3 c, float lod) { return vec4(textureLod(s, c, lod)); }
             #define texture2DLod mc_texture2DLod
             #define texture2DGrad mc_texture2DGrad
+            #define texture2DGradARB mc_texture2DGrad
             #define texture2DProj mc_texture2DProj
             #define texture2D mc_texture2D
             #define texture3D mc_texture3D
+            #define texelFetch2D texelFetch
             #define shadow2DLod mc_shadow2DLod
             #define shadow2D mc_shadow2D
             #define attribute in
+            // The vertex attributes Iris adds; a pack may declare them narrower than vec4.
+            #define mc_Entity mc_in_mc_Entity
+            #define mc_midTexCoord mc_in_mc_midTexCoord
+            #define at_tangent mc_in_at_tangent
+            #define at_midBlock mc_in_at_midBlock
             // A reserved word here, a plain name in the GLSL the packs are written in.
             #define sampler mc_sampler_
             #define gl_VertexID gl_VertexIndex
@@ -1054,8 +1323,8 @@ private class Converter(private val source: Path, private val output: Path, priv
             const mat4 mc_TextureMatrix[2] = mat4[2](mat4(1.0), mat4(1.0 / 256.0, 0.0, 0.0, 0.0, 0.0, 1.0 / 256.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0 / 32.0, 1.0 / 32.0, 0.0, 1.0));
             #define gl_TextureMatrix mc_TextureMatrix
             // OpenGL's fixed-function fog: mc_fog is start, end, 1 / (end - start), density.
-            struct mc_FogParameters { float start; float end; float scale; float density; };
-            #define gl_Fog mc_FogParameters(mc_fog.x, mc_fog.y, mc_fog.z, mc_fog.w)
+            struct mc_FogParameters { vec4 color; float start; float end; float scale; float density; };
+            #define gl_Fog mc_FogParameters(mc_fogColor, mc_fog.x, mc_fog.y, mc_fog.z, mc_fog.w)
         """.trimIndent() + "\n"
 
         /** The overloads with a level-of-detail bias, which only fragment shaders have. */
@@ -1081,10 +1350,10 @@ private class Converter(private val source: Path, private val output: Path, priv
             #define gl_Color Color
             #define gl_MultiTexCoord0 vec4(UV0, 0.0, 1.0)
             #define gl_MultiTexCoord1 vec4(vec2(UV2), 0.0, 1.0)
-            #define mc_Entity vec4(vec2(McEntity), 0.0, 0.0)
-            #define mc_midTexCoord vec4(McMidTexCoord, 0.0, 1.0)
-            #define at_tangent McTangent
-            #define at_midBlock vec4(0.0)
+            #define mc_in_mc_Entity vec4(vec2(McEntity), 0.0, 0.0)
+            #define mc_in_mc_midTexCoord vec4(McMidTexCoord, 0.0, 1.0)
+            #define mc_in_at_tangent McTangent
+            #define mc_in_at_midBlock vec4(0.0)
         """.trimIndent() + "\n"
 
         /** The block the game fills for everything that is not terrain. */
@@ -1105,10 +1374,10 @@ private class Converter(private val source: Path, private val output: Path, priv
             #define gl_Color (Color * ColorModulator)
             #define gl_MultiTexCoord0 vec4(UV0, 0.0, 1.0)
             #define gl_MultiTexCoord1 vec4(vec2(UV2), 0.0, 1.0)
-            #define mc_Entity vec4(-1.0)
-            #define mc_midTexCoord vec4(UV0, 0.0, 1.0)
-            #define at_tangent vec4(1.0, 0.0, 0.0, 1.0)
-            #define at_midBlock vec4(0.0)
+            #define mc_in_mc_Entity vec4(-1.0)
+            #define mc_in_mc_midTexCoord vec4(UV0, 0.0, 1.0)
+            #define mc_in_at_tangent vec4(1.0, 0.0, 0.0, 1.0)
+            #define mc_in_at_midBlock vec4(0.0)
         """.trimIndent() + "\n"
 
         val PARTICLE_INPUTS = """
@@ -1121,10 +1390,10 @@ private class Converter(private val source: Path, private val output: Path, priv
             #define gl_Color (Color * ColorModulator)
             #define gl_MultiTexCoord0 vec4(UV0, 0.0, 1.0)
             #define gl_MultiTexCoord1 vec4(vec2(UV2), 0.0, 1.0)
-            #define mc_Entity vec4(-1.0)
-            #define mc_midTexCoord vec4(UV0, 0.0, 1.0)
-            #define at_tangent vec4(1.0, 0.0, 0.0, 1.0)
-            #define at_midBlock vec4(0.0)
+            #define mc_in_mc_Entity vec4(-1.0)
+            #define mc_in_mc_midTexCoord vec4(UV0, 0.0, 1.0)
+            #define mc_in_at_tangent vec4(1.0, 0.0, 0.0, 1.0)
+            #define mc_in_at_midBlock vec4(0.0)
         """.trimIndent() + "\n"
 
         val CELESTIAL_INPUTS = """
@@ -1135,10 +1404,10 @@ private class Converter(private val source: Path, private val output: Path, priv
             #define gl_Color ColorModulator
             #define gl_MultiTexCoord0 vec4(UV0, 0.0, 1.0)
             #define gl_MultiTexCoord1 vec4(240.0, 240.0, 0.0, 1.0)
-            #define mc_Entity vec4(-1.0)
-            #define mc_midTexCoord gl_MultiTexCoord0
-            #define at_tangent vec4(1.0, 0.0, 0.0, 1.0)
-            #define at_midBlock vec4(0.0)
+            #define mc_in_mc_Entity vec4(-1.0)
+            #define mc_in_mc_midTexCoord gl_MultiTexCoord0
+            #define mc_in_at_tangent vec4(1.0, 0.0, 0.0, 1.0)
+            #define mc_in_at_midBlock vec4(0.0)
         """.trimIndent() + "\n"
 
         /**
@@ -1157,10 +1426,10 @@ private class Converter(private val source: Path, private val output: Path, priv
             #define gl_Color mc_flwColor
             #define gl_MultiTexCoord0 vec4(mc_flwTexCoord, 0.0, 1.0)
             #define gl_MultiTexCoord1 vec4(mc_flwLight, 0.0, 1.0)
-            #define mc_Entity vec4(-1.0)
-            #define mc_midTexCoord vec4(mc_flwTexCoord, 0.0, 1.0)
-            #define at_tangent vec4(1.0, 0.0, 0.0, 1.0)
-            #define at_midBlock vec4(0.0)
+            #define mc_in_mc_Entity vec4(-1.0)
+            #define mc_in_mc_midTexCoord vec4(mc_flwTexCoord, 0.0, 1.0)
+            #define mc_in_at_tangent vec4(1.0, 0.0, 0.0, 1.0)
+            #define mc_in_at_midBlock vec4(0.0)
         """.trimIndent() + "\n"
 
         /** One triangle that covers the target, in place of the full-screen quad OpenGL packs are given. */
@@ -1170,10 +1439,10 @@ private class Converter(private val source: Path, private val output: Path, priv
             #define gl_MultiTexCoord1 vec4(0.0, 0.0, 0.0, 1.0)
             #define gl_Color vec4(1.0)
             #define gl_Normal vec3(0.0, 0.0, 1.0)
-            #define mc_Entity vec4(-1.0)
-            #define mc_midTexCoord gl_MultiTexCoord0
-            #define at_tangent vec4(1.0, 0.0, 0.0, 1.0)
-            #define at_midBlock vec4(0.0)
+            #define mc_in_mc_Entity vec4(-1.0)
+            #define mc_in_mc_midTexCoord gl_MultiTexCoord0
+            #define mc_in_at_tangent vec4(1.0, 0.0, 0.0, 1.0)
+            #define mc_in_at_midBlock vec4(0.0)
         """.trimIndent() + "\n"
 
         val WORLD_FRAGMENT_PRELUDE = """

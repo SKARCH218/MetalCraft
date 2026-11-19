@@ -192,13 +192,21 @@ internal class ConvertedSpec(json: JsonObject, dimension: String) {
     private val part: JsonObject = json.getAsJsonObject("dimensions").let { it.getAsJsonObject(dimension) ?: it.getAsJsonObject("world0") }
 
     class Buffer(val index: Int, val format: GpuFormat, val clear: Boolean, val scale: Float)
-    class Texture(val name: String, val compare: Boolean)
+    /** [volume]: the program samples it as a sampler3D. */
+    class Texture(val name: String, val compare: Boolean, val volume: Boolean)
     class Program(
         val name: String, val kind: String, val vertex: String, val fragment: String, val textures: List<Texture>,
         val targets: IntArray, val blend: IntArray, val alphaTest: Float,
     )
     class Uniform(val name: String, val type: String, val offset: Int)
-    class Image(val file: String, val repeat: Boolean)
+    /**
+     * An image file of the pack (or `namespace:path` of a game texture). A PNG, or with [format] set raw texels:
+     * [width] x [height] x [depth] of [pixel] components (`RED`, `RG`, `RGB`, `RGBA`) of type [pixelType].
+     */
+    class Image(
+        val file: String, val repeat: Boolean, val linear: Boolean, val volume: Boolean, val format: String?,
+        val width: Int, val height: Int, val depth: Int, val pixel: String, val pixelType: String,
+    )
 
     val buffers: Map<Int, Buffer> = json.getAsJsonObject("buffers").entrySet().associate { (name, value) ->
         val index = name.removePrefix("colortex").toInt()
@@ -208,11 +216,20 @@ internal class ConvertedSpec(json: JsonObject, dimension: String) {
     val gbuffers: IntArray = part.getAsJsonArray("gbuffers").map { it.asInt }.toIntArray()
     /** The pack's colortex0 is the first attachment of the world passes, in place of the game image. */
     val primaryTarget: Boolean = json.get("primaryTarget")?.asBoolean ?: false
+
+    /** With [primaryTarget]: the buffer that is the first attachment of the world passes. */
+    val primaryBuffer: Int = part.get("primaryBuffer")?.asInt ?: 0
     val shadowResolution: Int = part.getAsJsonObject("shadow").get("resolution").asInt
     val shadowDistance: Float = part.getAsJsonObject("shadow").get("distance").asFloat
     val sunPathRotation: Float = part.getAsJsonObject("shadow").get("sunPathRotation").asFloat
     val images: Map<String, Image> = json.getAsJsonObject("textures").entrySet().associate { (name, value) ->
-        name to Image(value.asJsonObject.get("file").asString, value.asJsonObject.get("repeat").asBoolean)
+        val image = value.asJsonObject
+        name to Image(
+            image.get("file").asString, image.get("repeat")?.asBoolean ?: true, image.get("linear")?.asBoolean ?: true,
+            image.get("volume")?.asBoolean ?: false, image.get("format")?.asString,
+            image.get("width")?.asInt ?: 0, image.get("height")?.asInt ?: 0, image.get("depth")?.asInt ?: 1,
+            image.get("pixel")?.asString ?: "RGBA", image.get("pixelType")?.asString ?: "UNSIGNED_BYTE",
+        )
     }
     val passes: List<String> = part.getAsJsonArray("passes").map { it.asString }
 
@@ -229,7 +246,7 @@ internal class ConvertedSpec(json: JsonObject, dimension: String) {
         val program = value.asJsonObject
         name to Program(
             name, program.get("kind").asString, program.get("vertex").asString, program.get("fragment").asString,
-            program.getAsJsonArray("textures").map { Texture(it.asJsonObject.get("name").asString, it.asJsonObject.get("compare").asBoolean) },
+            program.getAsJsonArray("textures").map { Texture(it.asJsonObject.get("name").asString, it.asJsonObject.get("compare").asBoolean, it.asJsonObject.get("volume")?.asBoolean ?: false) },
             program.getAsJsonArray("targets").map { it.asInt }.toIntArray(),
             program.getAsJsonArray("blend")?.map { it.asInt }?.toIntArray() ?: IntArray(0),
             program.get("alphaTest")?.asFloat ?: -1f,
@@ -254,13 +271,12 @@ internal class ConvertedSpec(json: JsonObject, dimension: String) {
         require(shadowResolution in 256..8192) { "Shadow resolution $shadowResolution is outside 256..8192" }
         require(shadowDistance >= 8f && shadowDistance <= 1024f) { "Shadow distance $shadowDistance is outside 8..1024" }
         require(uniformBlockSize in 16..65536) { "Uniform block size $uniformBlockSize is not plausible" }
-        val extra = if (primaryTarget) gbuffers.count { it != 0 } else gbuffers.size
+        val extra = if (primaryTarget) gbuffers.count { it != primaryBuffer } else gbuffers.size
         require(extra <= 7) { "The world programs write more buffers than a pass can hold (8 with the first)" }
         for (index in gbuffers) require(index in buffers) { "World programs write colortex$index, which is not declared" }
     }
 
-    private companion object {
-        /** OpenGL names as packs write them. Metal has no three-channel formats, so those get a fourth. */
+    companion object {
         /** OpenGL's name for a buffer format. Three-channel formats Metal lacks get a fourth channel. */
         fun format(name: String): GpuFormat = when (name) {
             "R11F_G11F_B10F" -> GpuFormat.RG11B10_FLOAT

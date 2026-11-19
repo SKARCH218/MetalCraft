@@ -33,6 +33,7 @@ internal object Mcn {
     @JvmField val bufferCreate = bind("mcn_buffer_create", L, L, A, A, A)
     @JvmField val textureCreate = bind("mcn_texture_create", L, I, I, I, I, I, I, I, A, A)
     @JvmField val textureViewCreate = bind("mcn_texture_view_create", L, I, I, I, A)
+    @JvmField val imageCreate = bind("mcn_image_create", L, I, I, I, I, I, A, I, A, A, A)
     @JvmField val texelBufferCreate = bind("mcn_texel_buffer_create", L, I, L, L, I, A)
     @JvmField val samplerCreate = bind("mcn_sampler_create", L, I, I, I, I, I, I, F, A)
     @JvmField val shadowSamplerCreate = bind("mcn_shadow_sampler_create", L, A)
