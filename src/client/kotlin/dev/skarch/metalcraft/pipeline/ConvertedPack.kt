@@ -152,6 +152,8 @@ internal class ConvertedPack(
     private var shadow: Program? = null
     private var sky: Program? = null
     private val depthCopy: PackProgram
+    private val debugView: PackProgram?
+    private var debugStopped = false
 
     private val linear: MetalSampler
     private val nearest: MetalSampler
@@ -305,6 +307,15 @@ internal class ConvertedPack(
                     header + ShaderPipeline.engineSource("pack_depth_copy.fsh.metal"),
                     arrayOf(BindingEntry(BindingEntry.TEXTURE, GAME_DEPTH, null, 0)), null,
                     intArrayOf(MetalFormats.code(GpuFormat.R32_FLOAT)), intArrayOf(WRITE_ALL), 0, -1, false, 0,
+                ),
+                MetalFormats.NO_FORMAT,
+            )
+            debugView = if (DEBUG_VIEW == null) null else register(
+                PackProgram(
+                    device, "${pack.id}/debug view", header + ShaderPipeline.engineSource("pack_fullscreen.vsh.metal"),
+                    header + ShaderPipeline.engineSource("pack_debug_view.fsh.metal"),
+                    arrayOf(BindingEntry(BindingEntry.TEXTURE, "source", null, 0)), null,
+                    intArrayOf(MetalFormats.code(GpuFormat.RGBA8_UNORM)), intArrayOf(WRITE_ALL), 0, -1, false, 0,
                 ),
                 MetalFormats.NO_FORMAT,
             )
@@ -580,7 +591,12 @@ internal class ConvertedPack(
     }
 
     private fun passProgram(program: ConvertedSpec.Program): Program {
-        val stage = if (program.name.startsWith("deferred")) "deferred" else if (program.name.startsWith("gbuffers")) "gbuffers" else "composite"
+        val stage = when {
+            program.name.startsWith("prepare") -> "prepare"
+            program.name.startsWith("deferred") -> "deferred"
+            program.name.startsWith("gbuffers") -> "gbuffers"
+            else -> "composite"
+        }
         val slots = slots(program, stage)
         val formats = IntArray(program.targets.size) {
             MetalFormats.code(if (program.name == FINAL) GpuFormat.RGBA8_UNORM else color(program.targets[it]).spec.format)
@@ -602,7 +618,9 @@ internal class ConvertedPack(
             if (color != null && color.spec.clear) device.encoder.clearColorTexture(color.texture!!, clearBlack)
         }
         deferredDone = false
+        debugStopped = false
         renderShadow(minecraft, camera)
+        for (pass in passes) if (pass.stage == "prepare") runPass(pass, target)
         sky?.let { runPass(it, target) }
     }
 
@@ -662,7 +680,8 @@ internal class ConvertedPack(
     fun endWorld(target: Upscaler.WorldTarget) {
         beforeTranslucent(target)
         copyDepth(target.depthView, depth0View!!)
-        for (pass in passes) if (pass.stage != "deferred") runPass(pass, target)
+        for (pass in passes) if (pass.stage == "composite") runPass(pass, target)
+        debugView?.let { showBuffer(it, target) }
         if (!reportedMissing) {
             reportedMissing = true
             val computed = customUniforms?.names ?: emptyList()
@@ -730,6 +749,28 @@ internal class ConvertedPack(
         }
     }
 
+    /** Debugging aid: the buffer named by METALCRAFT_DEBUG_VIEW in place of the pack's final image. */
+    private fun showBuffer(program: PackProgram, target: Upscaler.WorldTarget) {
+        val name = DEBUG_VIEW ?: return
+        val view = when {
+            name == "depthtex0" -> depth0View
+            name == "depthtex1" -> depth1View
+            name.startsWith("shadowcolor") -> shadowColorViews[name.last() - '0']
+            else -> colors.getOrNull(name.removePrefix("colortex").toIntOrNull() ?: -1)?.view
+        } ?: return
+        val descriptor = RenderPassDescriptor.create { "MetalCraft debug view" }
+            .withColorAttachment(target.colorView)
+            .withRenderArea(RenderPass.RenderArea(0, 0, target.width, target.height))
+        val pass = device.encoder.createRenderPass(descriptor) as MetalRenderPass
+        try {
+            pass.setProgram(program)
+            pass.bindTexture("source", view, nearest)
+            pass.draw(3, 1, 0, 0)
+        } finally {
+            device.encoder.submitRenderPass()
+        }
+    }
+
     private fun copyDepth(gameDepth: MetalTextureView, into: MetalTextureView) {
         val descriptor = RenderPassDescriptor.create { "MetalCraft depth copy" }
             .withColorAttachment(into)
@@ -747,6 +788,10 @@ internal class ConvertedPack(
     private fun runPass(pass: Program, target: Upscaler.WorldTarget) {
         val isFinal = pass.spec.name == FINAL
         val targets = pass.spec.targets
+        // A pass that writes nothing has nothing to draw into.
+        if (targets.isEmpty() && !isFinal) return
+        if (debugStopped || (isFinal && debugView != null)) return
+        if (pass.spec.name == DEBUG_STOP) debugStopped = true
         val descriptor = RenderPassDescriptor.create(pass.label)
         var outWidth = target.width
         var outHeight = target.height
@@ -768,7 +813,7 @@ internal class ConvertedPack(
             renderPass.setProgram(pass.program)
             renderPass.setUniform(PACK_UNIFORMS, frameSlice!!)
             bindTextures(renderPass, pass)
-            renderPass.draw(3, 1, 0, 0)
+            renderPass.draw(6, 1, 0, 0)
         } finally {
             device.encoder.submitRenderPass()
         }
@@ -813,13 +858,22 @@ internal class ConvertedPack(
     private fun shareSamplers(msl: String, program: ConvertedSpec.Program, slots: Array<Slot>): String {
         if (slots.size <= MAX_SAMPLERS) return msl
         var text = msl
+        val aliases = StringBuilder()
         for (i in MAX_SAMPLERS until slots.size) {
             val sampler = samplerOf(slots[i])
             val other = (0 until MAX_SAMPLERS).firstOrNull { sampler != null && samplerOf(slots[it]) === sampler }
                 ?: throw IllegalArgumentException("${program.name} uses ${slots.size} textures and '${program.textures[i].name}' has no sampler to share")
             val name = program.textures[i].name
-            text = text.replace(Regex(""",\s*sampler ${name}Smplr \[\[sampler\(\d+\)]]"""), "")
-                .replace(Regex("""\b${name}Smplr\b"""), program.textures[other].name + "Smplr")
+            val declaration = Regex(""",\s*sampler ${name}Smplr \[\[sampler\(\d+\)]]""")
+            if (!declaration.containsMatchIn(text)) continue
+            // The entry point loses the parameter and gets a local of the same name instead.
+            text = text.replace(declaration, "")
+            aliases.append("    sampler ${name}Smplr = ${program.textures[other].name}Smplr;\n")
+        }
+        if (aliases.isNotEmpty()) {
+            val entry = text.indexOf(" main0(")
+            val body = text.indexOf('{', entry)
+            if (entry >= 0 && body >= 0) text = text.substring(0, body + 1) + "\n" + aliases + text.substring(body + 1)
         }
         return text
     }
@@ -1253,6 +1307,10 @@ internal class ConvertedPack(
 
         const val SOURCE_GAME = 0
         const val SOURCE_IMAGE = 1
+
+        /** METALCRAFT_DEBUG_VIEW=colortex3 shows that buffer instead of the final image; METALCRAFT_DEBUG_STOP=deferred2 runs no full-screen pass after that one. */
+        val DEBUG_VIEW: String? = System.getenv("METALCRAFT_DEBUG_VIEW")
+        val DEBUG_STOP: String? = System.getenv("METALCRAFT_DEBUG_STOP")
         const val MAX_SAMPLERS = 16
         const val SOURCE_COLOR = 2
         const val SOURCE_DEPTH0 = 3

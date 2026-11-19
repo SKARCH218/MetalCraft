@@ -82,8 +82,13 @@ private val OPTION_LINE = Regex("""^(\s*#define\s+(\w+)\s+)(\S+)(\s*//\s*\[.*)$"
 private val INTERFACE_LINE = Regex(
     """^\s*((?:(?:flat|smooth|noperspective|centroid|invariant)\s+)*)(in|out)\s+((?:(?:flat|smooth|noperspective|centroid|highp|mediump|lowp)\s+)*)(\w+)\s+([^;(){}=]+);\s*$""",
 )
-private val CONSTANT_LINE = Regex("""(?m)^(?:[ \t]*const[ \t]+\w+[ \t]+(\w+)[ \t]*=|(?:bool|int|float|i?vec[234]|mat[34])\s+(\w+)\s*[=;])""")
-private val NEWER_BUILTINS = listOf("tanh", "sinh", "cosh", "asinh", "acosh", "atanh", "round", "roundEven", "trunc", "isnan", "isinf", "fma", "inverse", "transpose", "determinant", "modf", "saturate")
+private val CONSTANT_LINE = Regex("""(?m)^[ \t]*(?:const[ \t]+\w+[ \t]+(\w+)[ \t]*=|(?:(?:flat|smooth|noperspective|centroid|in|out)[ \t]+)*(?:bool|int|float|i?vec[234]|mat[34])[ \t]+(\w+)[ \t]*[=;])""")
+private val NEWER_BUILTINS = listOf("tanh", "sinh", "cosh", "asinh", "acosh", "atanh", "round", "roundEven", "trunc", "isnan", "isinf", "fma", "inverse", "transpose", "determinant", "modf")
+
+/** Names Metal's shading language has taken: a pack's own function or variable of that name gets another. */
+private val METAL_NAMES = listOf("bias", "length_squared", "distance_squared", "saturate", "rsqrt", "fmod", "fmin", "fmax", "select", "powr", "exp10", "sinpi", "cospi", "tanpi", "popcount", "rotate", "level", "gradient2d", "min_lod_clamp",
+    // C++ keywords the translation to Metal lets through.
+    "new", "delete", "typename", "operator", "friend", "virtual", "auto", "register", "try", "catch", "throw", "and", "or", "not", "xor", "nullptr", "constexpr")
 private val STRUCT = Regex("""struct\s+(\w+)\s*\{([^}]*)}""")
 private val UNDECLARED = Regex("""'(\w+)' : undeclared identifier""")
 private val MATRIX_TYPE = Regex("""d?mat(\d)(?:x\d)?""")
@@ -454,7 +459,9 @@ private class Converter(private val source: Path, private val output: Path, priv
         val result = ArrayList<JsonObject>()
         val seen = HashSet<String>()
         // A trailing backslash continues a line.
-        val lines = Files.readString(file).replace(Regex("""\\\r?\n\s*"""), " ").lines()
+        // A trailing backslash continues a line, but not into a preprocessor directive.
+        val joined = Files.readString(file).replace(Regex("""\\[ \t]*\r?\n(?![ \t]*#)\s*"""), " ").replace(Regex("""\\[ \t]*\r?\n"""), "\n")
+        val lines = activeLines(joined.lines(), HashMap(packDefines))
         for (line in lines) {
             val match = CUSTOM_UNIFORM.matchEntire(line.trim()) ?: continue
             val name = match.groupValues[3]
@@ -482,9 +489,9 @@ private class Converter(private val source: Path, private val output: Path, priv
         println("FAILED  ${program.name}\n${error.message!!.lines().take(12).joinToString("\n") { "          $it" }}")
     }
 
-    /** deferred, deferred1, ... then composite, composite1, ... then final. */
+    /** prepare, prepare1, ... then deferred, deferred1, ... then composite, composite1, ... then final. */
     private fun passOrder(program: String): Int {
-        val group = if (program.startsWith("deferred")) 0 else if (program.startsWith("composite")) 1 else 2
+        val group = if (program.startsWith("prepare")) -1 else if (program.startsWith("deferred")) 0 else if (program.startsWith("composite")) 1 else 2
         return group * 1000 + (program.dropWhile { !it.isDigit() }.toIntOrNull() ?: 0)
     }
 
@@ -544,7 +551,9 @@ private class Converter(private val source: Path, private val output: Path, priv
     }
 
     /** The lines of a property file its `#if` blocks leave in, trimmed. [macros] collects the file's `#define`s. */
-    private fun activeLines(file: Path, macros: MutableMap<String, String>): List<String> {
+    private fun activeLines(file: Path, macros: MutableMap<String, String>): List<String> = activeLines(Files.readAllLines(file), macros)
+
+    private fun activeLines(lines: List<String>, macros: MutableMap<String, String>): List<String> {
         val result = ArrayList<String>()
         // One frame per open #if: [the enclosing block is active, a branch was already taken, this branch is active].
         val frames = ArrayDeque<BooleanArray>()
@@ -553,7 +562,7 @@ private class Converter(private val source: Path, private val output: Path, priv
             val outer = active()
             frames.addLast(booleanArrayOf(outer, outer && condition, outer && condition))
         }
-        for (line in Files.readAllLines(file)) {
+        for (line in lines) {
             val trimmed = line.trim()
             val directive = PROPERTY_DIRECTIVE.matchEntire(trimmed)
             when {
@@ -771,7 +780,7 @@ private class Converter(private val source: Path, private val output: Path, priv
         program == "gbuffers_entities" || program == "gbuffers_entities_translucent" -> Kind.ENTITY
         program == "gbuffers_textured" -> Kind.PARTICLE
         program == "gbuffers_skytextured" -> Kind.CELESTIAL
-        program.startsWith("deferred") || program.startsWith("composite") || program == "final" -> Kind.FULLSCREEN
+        program.startsWith("prepare") || program.startsWith("deferred") || program.startsWith("composite") || program == "final" -> Kind.FULLSCREEN
         // The sky only depends on the view direction, so it is drawn as a full-screen pass before the world.
         program == SKY_PROGRAM -> Kind.FULLSCREEN
         else -> null
@@ -916,7 +925,7 @@ private class Converter(private val source: Path, private val output: Path, priv
                     Kind.CELESTIAL -> DYNAMIC_TRANSFORMS + CELESTIAL_INPUTS + matrices("mc_bob * ModelViewMat", "gbufferProjection")
                     Kind.FLYWHEEL -> FLYWHEEL_INPUTS + matrices("gbufferModelView", "gbufferProjection")
                     Kind.SHADOW -> TERRAIN_INPUTS + matrices("shadowModelView", "shadowProjection")
-                    Kind.FULLSCREEN -> FULLSCREEN_INPUTS + matrices("mat4(1.0)", "mat4(1.0)")
+                    Kind.FULLSCREEN -> FULLSCREEN_INPUTS + matrices("mat4(1.0)", "mat4(2.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, -1.0, 0.0, 1.0)")
                 },
             )
         } else if (program.kind.world) {
@@ -941,10 +950,26 @@ private class Converter(private val source: Path, private val output: Path, priv
                 text = text.replace(Regex("""\b$name\b"""), "mc_pack_$name")
             }
         }
+        for (name in METAL_NAMES) {
+            if (text.contains(name)) text = text.replace(Regex("""\b$name\b"""), "mc_pack_$name")
+        }
         // A name can be a uniform under one pack option and a constant under another. Where the constant is
         // what survived the preprocessor, the uniform gives up the name.
         if (constants.isEmpty()) {
-            val clashing = CONSTANT_LINE.findAll(text).map { it.groupValues[1].ifEmpty { it.groupValues[2] } }.filter { it in program.uniformNames }.toSet()
+            // Only declarations outside every function count: a local may shadow a uniform.
+            val candidates = CONSTANT_LINE.findAll(text).filter { it.groupValues[1].ifEmpty { it.groupValues[2] } in program.uniformNames }.toList()
+            val clashing = HashSet<String>()
+            if (candidates.isNotEmpty()) {
+                var depth = 0
+                var at = 0
+                for (match in candidates) {
+                    while (at < match.range.first) {
+                        when (text[at]) { '{' -> depth++; '}' -> depth-- }
+                        at++
+                    }
+                    if (depth == 0) clashing.add(match.groupValues[1].ifEmpty { match.groupValues[2] })
+                }
+            }
             if (clashing.isNotEmpty()) return finish(program, stage, body, uniforms, clashing)
         }
 
@@ -1434,8 +1459,12 @@ private class Converter(private val source: Path, private val output: Path, priv
 
         /** One triangle that covers the target, in place of the full-screen quad OpenGL packs are given. */
         val FULLSCREEN_INPUTS = """
-            #define gl_Vertex vec4(vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2) * 2.0 - 1.0, 0.0, 1.0)
-            #define gl_MultiTexCoord0 vec4(vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2), 0.0, 1.0)
+            // A quad of two triangles, as OpenGL loaders draw it: packs that render at a reduced size scale it
+            // in the vertex stage and count on nothing being drawn outside.
+            const vec2 mc_corners[6] = vec2[6](vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, 1.0), vec2(1.0, 0.0), vec2(1.0, 1.0));
+            // The quad's corners are 0..1, as OptiFine and Iris hand them over; the projection maps them to the screen.
+            #define gl_Vertex vec4(mc_corners[gl_VertexIndex], 0.0, 1.0)
+            #define gl_MultiTexCoord0 vec4(mc_corners[gl_VertexIndex], 0.0, 1.0)
             #define gl_MultiTexCoord1 vec4(0.0, 0.0, 0.0, 1.0)
             #define gl_Color vec4(1.0)
             #define gl_Normal vec3(0.0, 0.0, 1.0)

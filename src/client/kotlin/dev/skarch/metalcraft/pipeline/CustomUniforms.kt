@@ -60,6 +60,7 @@ internal class CustomUniforms(
     private var block: ByteBuffer? = null
     private var lastBiome = ""
     private var biomeNumber = 0f
+    private var categoryNumber = 0f
 
     /** Names the pack's expressions set, so the engine does not report them as missing. */
     val names: List<String>
@@ -88,6 +89,7 @@ internal class CustomUniforms(
         if (inputs.biomeName != lastBiome) {
             lastBiome = inputs.biomeName
             biomeNumber = (biomeNumbers[lastBiome] ?: 0).toFloat()
+            categoryNumber = (CATEGORIES.indexOf(category(lastBiome)) + 1).toFloat()
         }
         for (i in 0 until entries.size) {
             val entry = entries[i]
@@ -157,6 +159,7 @@ internal class CustomUniforms(
                 1 -> v.rainfall
                 2 -> v.precipitation
                 3 -> biomeNumber
+                16 -> categoryNumber
                 4 -> flag(v.inWater)
                 5 -> flag(v.inLava)
                 6 -> flag(v.sneaking)
@@ -465,6 +468,7 @@ internal class CustomUniforms(
                 "rainfall" -> return Input(1)
                 "biome_precipitation" -> return Input(2)
                 "biome" -> return Input(3)
+                "biome_category" -> return Input(16)
                 "is_in_water" -> return Input(4)
                 "is_in_lava" -> return Input(5)
                 "is_sneaking" -> return Input(6)
@@ -481,6 +485,8 @@ internal class CustomUniforms(
                 "PPT_RAIN" -> return Constant(1f)
                 "PPT_SNOW" -> return Constant(2f)
             }
+            // CAT_<NAME>: the kind of biome, a grouping the game itself no longer has.
+            if (name.startsWith("CAT_")) return Constant((CATEGORIES.indexOf(name.removePrefix("CAT_").lowercase()) + 1).toFloat())
             // BIOME_<NAME> stands for a number; `biome` is the number of the biome the camera is in.
             if (name.startsWith("BIOME_")) {
                 val biome = name.removePrefix("BIOME_").lowercase()
@@ -503,4 +509,32 @@ internal class CustomUniforms(
 
         fun flag(value: Boolean): Float = if (value) 1f else 0f
     }
+}
+
+/** The biome categories packs test `biome_category` against (`CAT_<NAME>`), numbered from 1. */
+private val CATEGORIES = listOf(
+    "none", "taiga", "extreme_hills", "jungle", "mesa", "plains", "savanna", "icy", "the_end", "beach", "forest", "ocean",
+    "desert", "river", "swamp", "mushroom", "nether", "mountain", "underground",
+)
+
+/** The category of a biome, judged by its name: the game stopped classifying biomes this way. */
+private fun category(biome: String): String = when {
+    "end" in biome && ("the_end" in biome || "end_" in biome) -> "the_end"
+    biome in setOf("nether_wastes", "soul_sand_valley", "crimson_forest", "warped_forest", "basalt_deltas") -> "nether"
+    "cave" in biome || "deep_dark" in biome -> "underground"
+    "ocean" in biome -> "ocean"
+    "river" in biome -> "river"
+    "beach" in biome || "shore" in biome -> "beach"
+    "mushroom" in biome -> "mushroom"
+    "badlands" in biome -> "mesa"
+    "desert" in biome -> "desert"
+    "savanna" in biome -> "savanna"
+    "jungle" in biome -> "jungle"
+    "swamp" in biome -> "swamp"
+    "snowy" in biome || "ice" in biome || "frozen" in biome -> "icy"
+    "taiga" in biome || "grove" in biome -> "taiga"
+    "peaks" in biome || "slopes" in biome || "hills" in biome -> "extreme_hills"
+    "forest" in biome -> "forest"
+    "plains" in biome || "meadow" in biome -> "plains"
+    else -> "none"
 }

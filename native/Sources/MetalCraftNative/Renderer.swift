@@ -499,13 +499,30 @@ public func mcn_shader_pair_create(
         // Fast math lets the compiler reorder floating point, which shows up as z-fighting between passes
         // of the game's own shaders. Shader pack programs ask for it: they are far heavier and tolerate it.
         options.fastMathEnabled = fastMath != 0
-        let vertexLibrary = try device.makeLibrary(source: String(cString: vertexSource), options: options)
-        let fragmentLibrary = try device.makeLibrary(source: String(cString: fragmentSource), options: options)
+        let vertexLibrary = try compileLibrary(device, String(cString: vertexSource), options)
+        let fragmentLibrary = try compileLibrary(device, String(cString: fragmentSource), options)
         guard let vertexFunction = vertexLibrary.makeFunction(name: "main0"),
               let fragmentFunction = fragmentLibrary.makeFunction(name: "main0") else {
             throw SurfaceError("Shader has no main0 entry point")
         }
         outPair.pointee = retained(ShaderPair(vertex: vertexFunction, fragment: fragmentFunction))
+    }
+}
+
+/// Compiles shader source. A failure is reported by its error lines alone: the compiler lists every warning
+/// first, and those can fill the whole message.
+private func compileLibrary(_ device: MTLDevice, _ source: String, _ options: MTLCompileOptions) throws -> MTLLibrary {
+    do {
+        return try device.makeLibrary(source: source, options: options)
+    } catch {
+        let lines = error.localizedDescription.split(separator: "\n", omittingEmptySubsequences: false)
+        var kept: [Substring] = []
+        var take = 0
+        for line in lines {
+            if line.contains(": error:") { take = 3 }
+            if take > 0 { kept.append(line); take -= 1 }
+        }
+        throw SurfaceError(kept.isEmpty ? error.localizedDescription : kept.prefix(24).joined(separator: "\n"))
     }
 }
 
