@@ -238,19 +238,34 @@ run/test-output/<날짜-시간>/<backend>/
 - MetalFX 시간 60%, 5120×2644 평원(프레임 약 19ms)에서 렌더 패스 합은 약 14.5ms이고 나머지 약 5ms는 패스로 재지지 않는 부분이다(MetalFX 자체로 추정, 미확인). 그림자맵은 불투명을 한 번 그린 깊이를 복사한 뒤 반투명만 덧그린다(평원 52.6 → 54.2, 바다 46.5 → 49.1, 물속 44.0 → 49.5 FPS).
 - 변환기는 실행 가능한 jar로도 만든다: `./gradlew porterJar` → `java -XstartOnFirstThread -jar build/libs/metalcraft-porter.jar <팩 zip 또는 폴더> [출력 폴더] [포트 json]`(출력 폴더를 생략하면 `shaderpacks/<팩 이름>`).
 - 변환기가 Complementary 이외의 팩을 위해 지원하는 것(2026-11-18): 구형 GLSL(`varying`, `attribute`, `gl_FragColor`, `texture2D` 계열은 `mc_texture2D` 함수로), 정점→프래그먼트 변수의 이름 기준 location 지정(`link()`), 팩 루트의 프로그램과 차원 폴더의 조합, 없는 프로그램의 대체(`FALLBACKS`: 예 `gbuffers_terrain` ← `gbuffers_textured`), 옛 버퍼 이름(gcolor, gdepth, gnormal, composite, gaux1~4), 선언 없는 버퍼의 기본 포맷. uniform 블록은 프로그램이 선언하지 않은 멤버 이름을 `mc_other_`로 바꿔 충돌을 피한다. 엔진은 기본 noisetex, sunPosition·moonPosition·shadowLightPosition·upPosition, eyeBrightnessSmooth, fogStart·fogEnd를 제공한다.
-- 팩별 상태(2026-11-18): Sildur's Vibrant 2.02는 42개 프로그램이 모두 변환되고 게임에서 돈다(평원·밤·바다 장면이 Iris 기준과 비슷하게 나옴. 1920×1200에서 평원 235 / 바다 189 FPS, Iris는 122 / 110 FPS. 하늘 색이 Iris보다 진하고 물의 햇빛 반짝임이 없는 차이가 남아 있음). Kappa 5.3은 104개 프로그램이 모두 변환되고 로딩되지만 화면이 하얗게만 나온다(변환기가 아직 다루지 않는 `prepare` 패스, `shadowcomp`, `image/` 폴더의 사용자 텍스처, `biome_category`가 필요). Solas·Bliss·Photon·Rethinking Voxels는 컴퓨트 셰이더가 필요해 미착수. 원본은 `shaderpacks/_original/<이름>/`.
+- 팩별 상태(2026-11-19, 1920×1200, 평원 / 바다 / 밤 / 네더 FPS). 8개 중 7개가 변환되어 게임에서 돈다. 원본은 `shaderpacks/_original/<이름>/`.
+  - Complementary Reimagined r5.9.3: 51개 프로그램. 149 / 119 / 160 / 160. Iris는 103 / 90.
+  - Sildur's Vibrant 2.02: 39개. 231 / 190 / 245 / 337. Iris는 117 / 91. 밤·네더가 Iris 화면과 거의 같다(네더는 원본도 어둡다).
+  - Solas 3.9: 48개. 118 / 85 / 126 / 168. 맥의 Iris에서는 로딩 실패.
+  - AstraLex 93.0: 55개. 96 / 76 / 77 / 127. 맥의 Iris에서는 로딩 실패.
+  - Photon 1.4: 99개. 145 / 112 / 154 / 285. 맥의 Iris에서는 로딩 실패. 하늘빛 SH(컴퓨트 셰이더)를 끄고 변환한다(`ports/photon.json`).
+  - Kappa 5.3: 107개. 61 / 46 / 60 / 123. 맥의 Iris에서는 로딩 실패(`#version 430`).
+  - Bliss 2.1.2: 67개. 137 / 115 / 147 / 210. Iris는 82 / 76 / 89 / 44. **낮·바다는 정상이지만 밤과 네더가 Iris보다 누렇고 밝거나 어둡게 나온다(원인 미확인, 자동 노출 쪽으로 추정).**
+  - Rethinking Voxels r0.1-beta9: 57개가 변환되지만 지형 셰이더가 복셀 이미지(`voxel_sampler`)를 읽어 로딩에서 꺼진다. 컴퓨트 셰이더 31개, 지오메트리 셰이더, 이미지 읽기·쓰기, SSBO가 엔진에 있어야 한다. **미포팅.**
+  - Create 장면(부품 1,536개)을 팩과 함께(2026-11-19): Complementary 154, Sildur's 236, Bliss 118, Solas 107, AstraLex 103 FPS. **Kappa는 부품이 잘못된 크기로 그려진다**(팩의 `VertexDownscaling`이 Flywheel 정점 템플릿에 반영되지 않음). **Photon은 Flywheel용 팩 프로그램이 Metal 컴파일에 실패해**(`invalid return type 'main0_out' for vertex function`) Create가 폴백으로 내려가고 부품이 보이지 않는다.
+  - Kappa·Photon·Solas·AstraLex는 맥에서 원본을 돌릴 수 없어 비교할 기준 화면이 없다(`--iris` 실행이 바닐라 화면을 찍는다).
 - 월드 프로그램이 자기가 쓰는 색 버퍼를 읽으면(예: Sildur's 물의 굴절) 반투명 직전에 만든 사본을 읽는다(`ConvertedPack`의 `SOURCE_COLOR_SNAPSHOT`).
 - 팩이 `shaders.properties`에 수식으로 정의한 uniform(`uniform.<타입>.<이름>=식`, `variable...`)은 변환기가 `pack.json`의 `customUniforms`로 옮기고 엔진이 매 프레임 계산한다(`pipeline/CustomUniforms.kt`: 사칙·비교·논리, if, smooth, clamp, in, vec2~4, 삼각함수 등, 바이옴·플레이어 상태 값). 엔진이 직접 쓰는 이름은 엔진 값이 우선한다. smooth의 시간 상수는 Iris와 정확히 같은지 확인하지 못했다. 엔진의 버퍼 포맷 표는 OpenGL 포맷 이름 전반을 받는다.
 - 월드 패스의 색 첨부(2026-11-18 변경): 새로 변환한 팩(`pack.json`의 `primaryTarget: true`)은 팩의 colortex0이 게임 이미지 자리(첨부 0)에 들어가고, 월드 프로그램이 쓰는 나머지 버퍼가 그 뒤에 붙는다(최대 8개). 팩 프로그램이 없는 게임 파이프라인은 첨부 0에 그대로 그리되 색만 선형으로 바꾼다(`Gbuffer.PRIMARY`). 이 플래그가 없는 예전 변환본은 이전 방식(게임 이미지 + 버퍼들)으로 돈다.
-- AstraLex 93.0은 70개 프로그램이 모두 변환되고 게임에서 돈다(평원 108, 바다 90 FPS; 지형·빛줄기는 나오지만 물이 반사 없이 평평한 파란색으로 나옴, Iris 기준과 비교 전). 엔진은 `normals`·`specular` 샘플러에 평평한 기본 텍스처를 준다. Sildur's는 네더가 너무 어둡게 나온다(`isNether` 미지원).
+- 엔진이 팩의 `normals`·`specular` 샘플러에 평평한 기본 텍스처를 준다. 지오메트리 패스에서 `gcolor`라는 이름은 블록 아틀라스다(Kappa의 물).
 - 변환기는 팩이 `layout(location = n) out`으로 직접 선언한 프래그먼트 출력을 받아들이고(좁은 타입은 vec4로 넓힘), 한 이름이 옵션에 따라 uniform이기도 상수이기도 한 경우를 전처리 뒤에 가려낸다. 수식 계산기는 행렬 원소(`gbufferModelView.1.0`)를 읽는다.
-- 범용 포팅에 아직 없는 큰 항목: `prepare`·`shadowcomp` 패스, `shaders.properties`의 `texture.*` 사용자 텍스처(3D 포함) 자동 처리, 바이옴 분류(`biome_category`), 컴퓨트 셰이더, 팩이 직접 선언한 프래그먼트 출력, 엔티티 그림자(플레이어 그림자가 안 보임, 사용자 보고).
+- 변환기가 `shaders.properties`에서 옮기는 것(2026-11-19): 조건문(`#if`, `#ifdef`, 매크로)과 줄 이음, 프로그램 켜고 끄기(`program.<이름>.enabled`), 사용자 텍스처(`texture.<단계>.<버퍼>`, `texture.noise`, `customTexture.*`: PNG, 원시 2D·3D 데이터, 게임 텍스처; `.mcmeta`의 blur·clamp), 블렌딩(`blend.<프로그램>[.<버퍼>]`), 버퍼 크기(`size.buffer.*`), 알파 테스트(`alphaTest.*`), 수식 uniform, 옵션 화면 구성(`screen.*`, `profile.*`, `lang/`). 반투명 지형(`gbuffers_water`)은 팩이 달리 정하지 않으면 쓰는 버퍼 전부에 블렌딩이 켜진다(OpenGL과 같음).
+- 변환기·엔진이 팩 코드에 맞춰 주는 것(2026-11-19): 전체화면 패스는 꼭짓점이 0~1인 사각형(삼각형 둘)으로 그린다(팩이 `gl_Vertex`로 화면 일부에만 그리는 경우가 있다: Kappa의 렌더 스케일, Photon의 블룸 타일). `prepare` 패스는 그림자 뒤, 하늘 앞에 돈다. 월드 패스의 버퍼가 8개를 넘지 않게 첨부 0에 넣을 버퍼를 고른다(`primaryBuffer`). 구조체 varying의 location 수, 새 GLSL 내장 함수나 Metal 예약어와 겹치는 팩 이름(`mc_pack_` 접두사), 파일 범위 선언과 uniform의 이름 충돌, 팩이 선언 없이 쓰는 표준 uniform, 좁은 타입으로 선언한 Iris 정점 속성(`mc_midTexCoord` 등)을 처리한다. 버퍼 밉맵(`<버퍼>MipmapEnabled`)은 그 버퍼를 읽는 패스 직전에 만든다. 텍스처가 16개를 넘는 프로그램은 샘플러를 공유한다(Metal의 샘플러 슬롯은 16개).
+- 엔진이 주는 Iris uniform 추가분: 플레이어 체력·배고픔·공기·방어(`currentPlayerHealth` 등, 서바이벌이 아니면 -1), `nightVision`, `blindness`, `darknessFactor`, `alphaTestRef`(0.1 고정), 바이옴 분류(`biome_category`, `CAT_*`: 바이옴 이름으로 판단).
+- 디버깅: 환경변수 `METALCRAFT_DEBUG_VIEW=colortex3`은 팩의 최종 화면 대신 그 버퍼를 보여 준다(NaN은 자홍, 무한대는 청록, 음수는 파랑). `METALCRAFT_DEBUG_STOP=deferred2`는 그 패스 뒤의 전체화면 패스를 건너뛴다. 둘을 같이 써서 어느 패스에서 화면이 깨지는지 좁힌다. Metal 셰이더 컴파일 실패는 오류 줄만 추려 보고한다.
+- 범용 포팅에 아직 없는 큰 항목: 컴퓨트 셰이더와 이미지 읽기·쓰기(`shadowcomp`, `setup`, `*_a.csh`: Rethinking Voxels, 그리고 Photon·Bliss·Solas의 색 있는 조명 옵션), 지오메트리 셰이더, `begin` 패스, 팩의 그림자 프로그램이 쓰는 `shadowcolor` 이외의 그림자 버퍼.
 - 원본 팩 기준 실행: `scripts/run-tests.sh --iris <팩.zip>`이 Iris + Sodium을 넣고 OpenGL로 같은 장면을 찍는다(`shaderpacks/_original/`의 zip 사용, 결과 폴더 `iris-<팩>`, 픽셀 비교 없음). 포팅 결과와 화면·FPS를 비교하는 기준이다. Iris 버전은 `gradle.properties`의 `iris_version`.
 - 변환된 팩이 켜져 있으면 지형 정점 색에서 게임이 곱해 둔 면 방향 음영을 빼고, 팩이 `separateAo`를 쓰면 AO를 알파로 옮긴다(`TerrainVertexFormat.colorMode`). 블록 아틀라스는 nearest 샘플러로 묶는다(게임은 선형 샘플러 + 자체 셰이더 필터링을 쓴다). 걷기 흔들림은 투영이 아니라 팩의 모델뷰 행렬에 넣는다. 그림자맵은 불투명만(shadowtex1)과 반투명 포함(shadowtex0) 두 장이다.
 - 팩 프로그램이 없는 게임 파이프라인(블록 외곽선, 비, 번개, 이름표, 움직이는 블록 등)은 게임 셰이더가 팩의 색 버퍼에 직접 그린다(`MetalPipeline.variant`). 팩 조명은 받지 않는다. 바닐라 하늘·구름·엔티티 밑 그림자만 숨긴다.
 - 측정용으로 `-Pmetalcraft.test.width=<w> -Pmetalcraft.test.height=<h>`(환경변수 `ORG_GRADLE_PROJECT_...`)로 자동 테스트의 화면 크기를 바꿀 수 있다. 기준 세트는 1920×1200이다.
 - 자동 테스트의 팩 끄기/켜기는 K 키를 원하는 팩이 될 때까지 누른다(팩이 여러 개 설치돼 있어도 동작).
-- M7에서 아직 없는 것: 엔티티 그림자, 손(게임이 팩 뒤에 자체 셰이더로 그림), 날씨·선·번개·신호기 빔·글린트·움직이는 블록용 팩 프로그램(지금은 게임 셰이더로 보이기만 함), 엔티티별 uniform(entityId, entityColor 등, 로그에 목록이 남는다), 게임 안에서 바꾸는 팩 옵션(변환할 때 포트 설정의 `options`로만 지정 가능).
+- 엔티티 그림자(2026-11-19, `pipeline/ShadowCasters.kt`): 그림자맵에 엔티티를 상자로 그린다. 1인칭 플레이어는 머리·몸통·팔·다리 상자 여섯 개, 다른 엔티티는 바운딩 박스. 빛을 등진 면만 그려서 모델이 자기 그림자에 들지 않는다. `config/metalcraft.properties`의 `entity_shadows=false`로 끈다. `entity_shadows` 장면(낮은 아침 해)으로 확인한다. 실제 모델 모양의 그림자가 아니다.
+- M7에서 아직 없는 것: 손(게임이 팩 뒤에 자체 셰이더로 그림), 날씨·선·번개·신호기 빔·글린트·움직이는 블록용 팩 프로그램(지금은 게임 셰이더로 보이기만 함), 엔티티별 uniform(entityId, entityColor 등, 로그에 목록이 남는다), Create 부품의 그림자.
 - 손에 든 아이템의 빛(`heldBlockLightValue`, `heldItemId`와 왼손용 `...2`)은 엔진이 채운다. 팩의 `item.properties`는 변환기가 `items.properties`로 옮긴다. `held_light` 장면(밤, 횃불을 든 상태)으로 확인한다.
 - 하늘 스타일을 바꾼 변환 예: `ports/complementary-unbound-sky.json`(팩 자체의 사실적인 구름 + 둥근 해·달, 출력 폴더 `shaderpacks/complementary-sky`).
 - 줌: C 키를 누르고 있는 동안 시야각이 좁아지고 휠로 배율을 바꾼다(`zoom/Zoom.kt`, `CameraMixin`, `MouseHandlerMixin`). 조작 설정에서 키를 비우면 꺼진다.
@@ -261,7 +276,9 @@ run/test-output/<날짜-시간>/<backend>/
 - Flywheel 백엔드에 아직 없는 것: 블록 파괴 오버레이(crumbling), 순서 무관 투명도(일반 반투명으로 그림), Flywheel 디버그 보고서의 메시 풀 항목, 팩 그림자맵에 Create 부품 그리기, 컨트랩션(움직이는 구조물)과 벨트·유체 등 다른 인스턴스 타입의 화면 검증.
 - 비디오 설정의 Graphics API 버튼은 Metal 사용 중 "Metal"로 표시되고 잠겨 있다(2026-11-18 사용자 결정; `PreferredGraphicsApiMixin`이 enum에 값을 덧붙이고 `MetalCraftClient.lockGraphicsApi`가 잠근다). 게임 렌더러로 돌아가려면 `config/metalcraft.properties`의 `renderer=vanilla`.
 - 쉐이더 설정 화면(`config/ShaderSettingsScreen.kt`): 팩 목록(클릭하면 바로 전환), MetalFX 방식과 렌더 스케일, 현재 적용 중인 MetalFX 상태 표시, 팩 폴더 열기. 완료를 누르면 MetalFX 설정을 다시 읽고(`Upscaler.reconfigure`) 리소스를 리로드한다(재시작 불필요). 비디오 설정 오른쪽 위의 "쉐이더..." 버튼이나 O 키로 연다. Iris의 화면 코드는 쓰지 않았다(LGPL). 자동 테스트의 `gui_shaders` 장면이 이 화면과 비디오 설정 화면을 찍는다(눈으로 확인용).
-- 아직 없는 것: 게임 안에서 바꾸는 팩별 옵션 화면, GPU 타임스탬프 쿼리(F3의 GPU 사용률은 의미 없음), multi-draw·indirect draw(장치 기능으로 꺼 둠), 렌더 영역이 일부인 패스의 색·깊이 단독 클리어.
+- 팩 옵션 화면(2026-11-19, `config/PackOptionsScreen.kt`, `config/PackOptions.kt`): 쉐이더 설정 화면의 "팩 옵션..." 버튼. 변환기가 팩 폴더에 쓴 `options.json`(옵션과 기본값·선택지, 팩의 화면 구성, 프로필, 라벨, 원본 경로, 포트 설정)을 읽어 팩 자체의 설정 화면을 보여 준다. 값을 바꾸고 완료를 누르면 **변환기 jar를 자식 프로세스로 실행해 원본 팩을 새 옵션으로 다시 변환**하고 리소스를 리로드한다(몇 초). 변환기는 모드에 들어 있지 않다(범용 호환 계층을 런타임에 두지 않는다는 3-5의 원칙). 찾는 순서: `-Dmetalcraft.porter`, 게임 폴더·`shaderpacks/`·`config/`의 `metalcraft-porter.jar`, 모드 jar 안의 것(팩 포함 개인용 빌드). 원본 팩이 `options.json`의 경로에 그대로 있어야 한다. 자동 테스트: `gui_shaders` 장면이 `gui_pack_options`를 찍고, `-Pmetalcraft.test.packOption=<이름> -Pmetalcraft.test.packOptionValue=<값>`을 주면 실제로 바꿔서 `pack_option_changed`를 찍은 뒤 되돌린다.
+- 배포용 빌드: `./gradlew build`는 팩 없는 모드 jar(`build/libs/MetalCraft-<버전>.jar`, GitHub에 올리는 것). `./gradlew build -Pmetalcraft.bundlePacks=true`는 `shaderpacks/`의 변환된 팩과 변환기를 넣은 개인용 jar(`MetalCraft-with-packs-<버전>.jar`). 팩 포함 jar는 배포하지 않는다(7 참고). 게임 폴더의 `shaderpacks/`에 같은 이름의 팩이 있으면 jar 안의 것보다 우선한다.
+- 아직 없는 것: GPU 타임스탬프 쿼리(F3의 GPU 사용률은 의미 없음), multi-draw·indirect draw(장치 기능으로 꺼 둠), 렌더 영역이 일부인 패스의 색·깊이 단독 클리어.
 - Java 예외 한 곳: `backend/MetalBackendBase.java`. Mojang이 null을 넘기는데 non-null로 선언된 `GpuBackend.handleWindowCreationErrors`는 Kotlin으로 안전하게 오버라이드할 수 없어서 Java로 받는다.
 - Metal 백엔드는 게임테스트 API가 하는 화면 출력 크기 보정(`GlCommandEncoderMixin`, `VulkanGpuSurfaceMixin` 참고)을 직접 처리해야 한다.
 

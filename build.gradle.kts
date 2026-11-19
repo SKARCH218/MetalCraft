@@ -156,6 +156,30 @@ tasks.named<Copy>("processClientResources") {
     }
 }
 
+// A personal build with the converted shader packs of shaderpacks/ and the pack converter inside:
+//   ./gradlew build -Pmetalcraft.bundlePacks=true
+// It is not for distribution (CLAUDE.md section 7): the packs are other people's work.
+val bundlePacks = providers.gradleProperty("metalcraft.bundlePacks").orNull == "true"
+if (!bundlePacks) {
+    // What a bundling build left in the resources folder never gets into the normal jar.
+    tasks.named<Jar>("jar") {
+        exclude { it.path.startsWith("assets/metalcraft/shaderpacks/") && !it.path.startsWith("assets/metalcraft/shaderpacks/test") }
+        exclude("metalcraft-porter.jar")
+    }
+}
+if (bundlePacks) {
+    base.archivesName.set("${project.property("archives_base_name")}-with-packs")
+    tasks.named<Copy>("processClientResources") {
+        from(layout.projectDirectory.dir("shaderpacks")) {
+            into("assets/metalcraft/shaderpacks")
+            exclude("_original/**")
+            // The intermediate GLSL is only needed where Flywheel's programs are put together from it.
+            exclude { it.path.contains("/_glsl/") && it.name != "flywheel.vsh.glsl" && it.name != "gbuffers_entities.fsh.glsl" }
+        }
+        from(tasks.named("porterJar"))
+    }
+}
+
 
 repositories {
     // Add repositories to retrieve artifacts from in here.

@@ -28,3 +28,6 @@ native/.build/
 
 # oh-my-claudecode session state
 .omc/
+
+# Kotlin compiler session files
+.kotlin/
