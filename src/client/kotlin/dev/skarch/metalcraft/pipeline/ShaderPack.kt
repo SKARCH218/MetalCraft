@@ -205,6 +205,8 @@ internal class ConvertedSpec(json: JsonObject, dimension: String) {
         val blendOff: Boolean = false,
         /** Buffer (or -1 for every target) to source and destination factors for colour and alpha, as Metal codes. */
         val blendFunctions: Map<Int, IntArray> = emptyMap(),
+        /** Colour buffers whose mip levels this program samples (`<buffer>MipmapEnabled`). */
+        val mipmaps: IntArray = IntArray(0),
     )
     class Uniform(val name: String, val type: String, val offset: Int)
     /**
@@ -266,6 +268,7 @@ internal class ConvertedSpec(json: JsonObject, dimension: String) {
             program.getAsJsonObject("blendFunctions")?.entrySet()?.associate { (buffer, factors) ->
                 (buffer.toIntOrNull() ?: -1) to factors.asJsonArray.map { it.asInt }.toIntArray()
             } ?: emptyMap(),
+            program.getAsJsonArray("mipmaps")?.map { it.asInt }?.toIntArray() ?: IntArray(0),
         )
     }
     /** Whether the pack wants ambient occlusion in the alpha of terrain colours instead of multiplied in. */

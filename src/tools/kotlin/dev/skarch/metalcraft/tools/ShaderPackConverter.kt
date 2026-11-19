@@ -173,6 +173,7 @@ private val BLEND_FACTORS = mapOf(
 )
 private val SWITCH_LINE = Regex("""^(\s*)(//\s*)?#define\s+(\w+)(\s*(?://.*)?)$""")
 private val SIZE_PROPERTY = Regex("""size\.buffer\.(colortex\d+|gcolor|gdepth|gnormal|composite|gaux[1-4])\s*=\s*([\d.]+)\s+([\d.]+)""")
+private val MIPMAP_CONSTANT = Regex("""const\s+bool\s+(\w+)MipmapEnabled\s*=\s*true\s*;""")
 private val WORD = Regex("""\b[A-Za-z_]\w*\b""")
 private val OPTION_DEFINE = Regex("""\s*(//)?\s*#define\s+(\w+)[ \t]*([^\s/]*).*""")
 private val OPTION_FILES = setOf("glsl", "fsh", "vsh", "csh", "gsh", "h", "inc", "settings", "frag", "vert")
@@ -395,8 +396,11 @@ private class Converter(private val source: Path, private val output: Path, priv
                         })
                         entry.add("targets", JsonArray().also { array -> targets.forEach(array::add) })
                         port.getAsJsonObject("blend")?.get(program.name)?.let { entry.add("blend", it) }
+                        val mipmaps = MIPMAP_CONSTANT.findAll(fragmentGlsl).mapNotNull { LEGACY_BUFFERS[it.groupValues[1]] ?: it.groupValues[1].removePrefix("colortex").toIntOrNull() }.toSortedSet()
+                        if (mipmaps.isNotEmpty()) entry.add("mipmaps", JsonArray().also { array -> mipmaps.forEach(array::add) })
                         packBlend["$folder/${program.name}"]?.let { blend ->
-                            entry.addProperty("blendOff", true)
+                            // "all" present (even empty, for off): the pack sets the whole program's blending.
+                            if ("all" in blend) entry.addProperty("blendOff", true)
                             entry.add("blendFunctions", JsonObject().also { functions ->
                                 for ((buffer, factors) in blend) functions.add(buffer, JsonArray().also { array -> factors.forEach(array::add) })
                             })
@@ -659,14 +663,19 @@ private class Converter(private val source: Path, private val output: Path, priv
                 val value = match.groupValues[3].trim()
                 for (folder in DIMENSION_FOLDERS) {
                     val entry = result.getOrPut("$folder/${match.groupValues[1]}") { HashMap() }
-                    if (value.equals("off", ignoreCase = true)) continue
+                    val buffer = match.groupValues[2].ifEmpty { "all" }
+                    val key = if (buffer == "all") buffer else (LEGACY_BUFFERS[buffer] ?: buffer.removePrefix("colortex").toInt()).toString()
+                    // No factors: that buffer (or with "all" the program) does not blend.
+                    if (value.equals("off", ignoreCase = true)) {
+                        entry[key] = emptyList()
+                        continue
+                    }
                     val factors = value.split(Regex("\\s+")).map { BLEND_FACTORS[it.uppercase()] }
                     if (factors.size != 4 || factors.any { it == null }) {
                         println("warning: blend setting not understood: $line")
                         continue
                     }
-                    val buffer = match.groupValues[2].ifEmpty { "all" }
-                    entry[if (buffer == "all") buffer else (LEGACY_BUFFERS[buffer] ?: buffer.removePrefix("colortex").toInt()).toString()] = factors.map { it!! }
+                    entry[key] = factors.map { it!! }
                 }
             }
         }
@@ -700,6 +709,9 @@ private class Converter(private val source: Path, private val output: Path, priv
             }
         }
         defines["MC_VERSION"] = MC_VERSION.toString()
+        // What Iris defines for every file, as far as packs test it in their property files.
+        for (name in listOf("IS_IRIS", "MC_OS_MAC", "MC_GL_VENDOR_APPLE", "MC_GL_RENDERER_APPLE", "MC_NORMAL_MAP", "MC_SPECULAR_MAP")) defines[name] = ""
+        defines["IRIS_VERSION"] = "11000"
         defines
     }
 

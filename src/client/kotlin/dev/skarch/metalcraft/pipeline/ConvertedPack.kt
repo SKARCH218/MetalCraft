@@ -76,12 +76,14 @@ internal class ConvertedPack(
         var altTexture: MetalTexture? = null
         var altView: MetalTextureView? = null
         var needsAlt = false
+        var mipmapped = false
     }
 
     private class Image(val texture: MetalTexture, val view: MetalTextureView, val repeat: Boolean, val linear: Boolean = true, val volume: Boolean = false)
 
     /** Where one texture of a program comes from. */
-    private class Slot(val entryName: String, val source: Int, val index: Int, val compare: Boolean, val image: Image?)
+    /** [mip]: the program samples the smaller mip levels of this colour buffer. */
+    private class Slot(val entryName: String, val source: Int, val index: Int, val compare: Boolean, val image: Image?, val mip: Boolean = false)
 
     private class Program(val spec: ConvertedSpec.Program, val program: PackProgram, val slots: Array<Slot>, val stage: String) {
         /** The pass name seen in GPU captures and in the per-pass timing report. */
@@ -145,6 +147,8 @@ internal class ConvertedPack(
     private val images = HashMap<String, Image>()
     /** Colour buffers that world programs both read and write, see [slots]. */
     private val snapshots = it.unimi.dsi.fastutil.ints.IntArrayList()
+    /** Colour buffers whose mip levels world programs sample; they are filled in before translucent things are drawn. */
+    private val worldMips = it.unimi.dsi.fastutil.ints.IntArrayList()
     private val programs = ArrayList<PackProgram>()
     private val passes = ArrayList<Program>()
     private var terrain: Program? = null
@@ -158,6 +162,7 @@ internal class ConvertedPack(
     private val linear: MetalSampler
     private val nearest: MetalSampler
     private val linearRepeat: MetalSampler
+    private val linearMip: MetalSampler
     private val nearestRepeat: MetalSampler
     private val shadowCompare: MetalSampler
 
@@ -265,6 +270,9 @@ internal class ConvertedPack(
         linear = sampler(AddressMode.CLAMP_TO_EDGE, FilterMode.LINEAR)
         nearest = sampler(AddressMode.CLAMP_TO_EDGE, FilterMode.NEAREST)
         linearRepeat = sampler(AddressMode.REPEAT, FilterMode.LINEAR)
+        linearMip = device.createSampler(
+            AddressMode.CLAMP_TO_EDGE, AddressMode.CLAMP_TO_EDGE, FilterMode.LINEAR, FilterMode.LINEAR, 1, OptionalDouble.empty(),
+        ) as MetalSampler
         nearestRepeat = sampler(AddressMode.REPEAT, FilterMode.NEAREST)
         shadowCompare = device.createShadowSampler()
         atlas = device.createSampler(
@@ -283,6 +291,7 @@ internal class ConvertedPack(
         shadowColorViews = Array(2) { device.createTextureView(shadowColors[it]) as MetalTextureView }
         drawShadow = drawUniforms(0.1f)
         for (buffer in spec.buffers.values) colors[buffer.index] = Color(buffer)
+        for (program in spec.programs.values) for (index in program.mipmaps) colors.getOrNull(index)?.mipmapped = true
 
         try {
             for ((name, image) in spec.images) {
@@ -339,9 +348,9 @@ internal class ConvertedPack(
     private fun sampler(address: AddressMode, filter: FilterMode) =
         device.createSampler(address, address, filter, filter, 1, OptionalDouble.of(0.0)) as MetalSampler
 
-    private fun colorTexture(label: String, format: GpuFormat, w: Int, h: Int) = device.createTexture(
+    private fun colorTexture(label: String, format: GpuFormat, w: Int, h: Int, mipmapped: Boolean = false) = device.createTexture(
         label, GpuTexture.USAGE_RENDER_ATTACHMENT or GpuTexture.USAGE_TEXTURE_BINDING or GpuTexture.USAGE_COPY_SRC or GpuTexture.USAGE_COPY_DST,
-        format, w, h, 1, 1,
+        format, w, h, 1, if (mipmapped) 32 - Integer.numberOfLeadingZeros(maxOf(w, h)) else 1,
     ) as MetalTexture
 
     private fun drawUniforms(alphaTest: Float): GpuBufferSlice = drawUniforms.getOrPut(alphaTest) {
@@ -486,9 +495,13 @@ internal class ConvertedPack(
                         width = 0
                     }
                 }
-                Slot(texture.name, SOURCE_COLOR_SNAPSHOT, index, false, null)
+                if (index in program.mipmaps && !worldMips.contains(index)) worldMips.add(index)
+                Slot(texture.name, SOURCE_COLOR_SNAPSHOT, index, false, null, index in program.mipmaps)
             }
-            name.startsWith("colortex") -> Slot(texture.name, SOURCE_COLOR, color(name.removePrefix("colortex").toInt()).spec.index, false, null)
+            name.startsWith("colortex") -> name.removePrefix("colortex").toInt().let { index ->
+                if (stage == "gbuffers" && index in program.mipmaps && !worldMips.contains(index)) worldMips.add(index)
+                Slot(texture.name, SOURCE_COLOR, color(index).spec.index, false, null, index in program.mipmaps)
+            }
             name == "depthtex0" -> Slot(texture.name, SOURCE_DEPTH0, 0, false, null)
             name == "depthtex1" || name == "depthtex2" -> Slot(texture.name, SOURCE_DEPTH1, 0, false, null)
             name == "shadowtex0" || name == "shadowtex1" -> Slot(texture.name, SOURCE_SHADOW_DEPTH, name.last() - '0', texture.compare, null)
@@ -514,17 +527,21 @@ internal class ConvertedPack(
         val masks = IntArray(formats.size) { if (attachments[it] in program.targets) WRITE_ALL else 0 }
         var blend = 0
         var functions: Array<IntArray?>? = null
+        // Without word from the pack, the buffers the caller names blend the way the game's pipeline does.
+        if (!program.blendOff) for (target in blendTargets) if (target in program.targets) blend = blend or (1 shl attachments.indexOf(target))
         if (program.blendOff || program.blendFunctions.isNotEmpty()) {
-            // The pack decides: only the buffers it gives a function blend, each with its own.
+            // The pack's settings: a function for one buffer or for all, or no factors for "does not blend".
             functions = arrayOfNulls(formats.size)
             for (i in formats.indices) {
                 if (attachments[i] !in program.targets) continue
                 val factors = program.blendFunctions[attachments[i]] ?: program.blendFunctions[-1] ?: continue
-                blend = blend or (1 shl i)
-                functions[i] = intArrayOf(0, 0, factors[0], factors[1], factors[2], factors[3])
+                if (factors.size < 4) {
+                    blend = blend and (1 shl i).inv()
+                } else {
+                    blend = blend or (1 shl i)
+                    functions[i] = intArrayOf(0, 0, factors[0], factors[1], factors[2], factors[3])
+                }
             }
-        } else {
-            for (target in blendTargets) if (target in program.targets) blend = blend or (1 shl attachments.indexOf(target))
         }
         val buffers = if (withGlobals) {
             entries(slots, PACK_UNIFORMS_ENTRY, DRAW_UNIFORMS_ENTRY, geometryBlock, GLOBALS_ENTRY)
@@ -618,6 +635,7 @@ internal class ConvertedPack(
         val passFunctions = arrayOfNulls<IntArray>(formats.size)
         for (i in formats.indices) {
             val factors = program.blendFunctions[program.targets[i]] ?: program.blendFunctions[-1] ?: continue
+            if (factors.size < 4) continue
             passBlend = passBlend or (1 shl i)
             passFunctions[i] = intArrayOf(0, 0, factors[0], factors[1], factors[2], factors[3])
         }
@@ -693,6 +711,12 @@ internal class ConvertedPack(
             val copy = color.altTexture ?: continue
             device.encoder.copyTextureToTexture(from, copy, 0, 0, 0, 0, 0, from.getWidth(0), from.getHeight(0))
         }
+        for (i in 0 until worldMips.size) {
+            val color = color(worldMips.getInt(i))
+            // A buffer the translucent programs also write is read through its copy.
+            val read = if (snapshots.contains(color.spec.index)) color.altTexture ?: color.texture else color.texture
+            read?.let { device.encoder.generateMipmaps(it) }
+        }
         // The deferred passes may have flipped buffers the translucent programs write to.
         gbuffer(target.colorTexture)
     }
@@ -719,12 +743,12 @@ internal class ConvertedPack(
             if (color == null) continue
             val w = if (color.spec.width > 0) color.spec.width else maxOf(1, (newWidth * color.spec.scale).toInt())
             val h = if (color.spec.height > 0) color.spec.height else maxOf(1, (newHeight * color.spec.scaleY).toInt())
-            color.texture = colorTexture("colortex${color.spec.index}", color.spec.format, w, h)
+            color.texture = colorTexture("colortex${color.spec.index}", color.spec.format, w, h, color.mipmapped)
             color.view = device.createTextureView(color.texture!!) as MetalTextureView
             // Buffers the pack does not clear keep their content between frames: start them from zero.
             device.encoder.clearColorTexture(color.texture!!, clearBlack)
             if (color.needsAlt) {
-                color.altTexture = colorTexture("colortex${color.spec.index} (alt)", color.spec.format, w, h)
+                color.altTexture = colorTexture("colortex${color.spec.index} (alt)", color.spec.format, w, h, color.mipmapped)
                 color.altView = device.createTextureView(color.altTexture!!) as MetalTextureView
                 device.encoder.clearColorTexture(color.altTexture!!, clearBlack)
             }
@@ -811,6 +835,7 @@ internal class ConvertedPack(
         // A pass that writes nothing has nothing to draw into.
         if (targets.isEmpty() && !isFinal) return
         if (debugStopped || (isFinal && debugView != null)) return
+        for (index in pass.spec.mipmaps) colors.getOrNull(index)?.texture?.let { device.encoder.generateMipmaps(it) }
         if (pass.spec.name == DEBUG_STOP) debugStopped = true
         val descriptor = RenderPassDescriptor.create(pass.label)
         var outWidth = target.width
@@ -868,7 +893,7 @@ internal class ConvertedPack(
         SOURCE_IMAGE -> imageSampler(slot.image!!)
         SOURCE_DEPTH0, SOURCE_DEPTH1 -> nearest
         SOURCE_SHADOW_DEPTH -> if (slot.compare) shadowCompare else nearest
-        else -> linear
+        else -> if (slot.mip) linearMip else linear
     }
 
     /**
@@ -903,8 +928,8 @@ internal class ConvertedPack(
             when (slot.source) {
                 SOURCE_GAME -> {}
                 SOURCE_IMAGE -> pass.bindTexture(slot.entryName, slot.image!!.view, imageSampler(slot.image))
-                SOURCE_COLOR -> pass.bindTexture(slot.entryName, color(slot.index).view!!, linear)
-                SOURCE_COLOR_SNAPSHOT -> pass.bindTexture(slot.entryName, color(slot.index).altView ?: color(slot.index).view!!, linear)
+                SOURCE_COLOR -> pass.bindTexture(slot.entryName, color(slot.index).view!!, if (slot.mip) linearMip else linear)
+                SOURCE_COLOR_SNAPSHOT -> pass.bindTexture(slot.entryName, color(slot.index).altView ?: color(slot.index).view!!, if (slot.mip) linearMip else linear)
                 SOURCE_DEPTH0 -> pass.bindTexture(slot.entryName, depth0View!!, nearest)
                 SOURCE_DEPTH1 -> pass.bindTexture(slot.entryName, depth1View!!, nearest)
                 SOURCE_SHADOW_DEPTH -> pass.bindTexture(
@@ -1065,6 +1090,26 @@ internal class ConvertedPack(
         val player = minecraft.player
         val mainHand = player?.mainHandItem
         val offHand = player?.offhandItem
+        // The player's state as Iris reports it: fractions of the maximum, -1 where the game mode has none.
+        val survival = minecraft.gameMode?.playerMode?.isSurvival == true
+        if (player != null && survival) {
+            float("currentPlayerHealth", player.health / player.maxHealth)
+            float("currentPlayerHunger", player.foodData.foodLevel / 20f)
+            float("currentPlayerAir", player.airSupply.toFloat() / player.maxAirSupply)
+            float("currentPlayerArmor", player.armorValue / 50f)
+        } else {
+            float("currentPlayerHealth", -1f)
+            float("currentPlayerHunger", -1f)
+            float("currentPlayerAir", -1f)
+            float("currentPlayerArmor", -1f)
+        }
+        float("maxPlayerHealth", player?.maxHealth ?: -1f)
+        float("maxPlayerHunger", 20f)
+        float("maxPlayerAir", player?.maxAirSupply?.toFloat() ?: -1f)
+        float("maxPlayerArmor", 50f)
+        float("nightVision", if (player?.hasEffect(net.minecraft.world.effect.MobEffects.NIGHT_VISION) == true) 1f else 0f)
+        float("blindness", if (player?.hasEffect(net.minecraft.world.effect.MobEffects.BLINDNESS) == true) 1f else 0f)
+        float("darknessFactor", if (player?.hasEffect(net.minecraft.world.effect.MobEffects.DARKNESS) == true) 1f else 0f)
         integer("heldBlockLightValue", heldLight(mainHand))
         integer("heldBlockLightValue2", heldLight(offHand))
         integer("heldItemId", heldId(mainHand))
@@ -1297,6 +1342,7 @@ internal class ConvertedPack(
         shadowDepthAllView.close()
         shadowDepthAll.close()
         linear.close()
+        linearMip.close()
         nearestRepeat.close()
         nearest.close()
         linearRepeat.close()

@@ -402,6 +402,11 @@ internal class MetalCommandEncoder(private val device: MetalDevice) : CommandEnc
         )
     }
 
+    /** Fills the smaller mip levels of [texture] from its base level (shader packs sample them for blurs and averages). */
+    fun generateMipmaps(texture: MetalTexture) {
+        Mcn.check(Mcn.generateMipmaps.invokeExact(context, texture.handle) as Int)
+    }
+
     /** Bytes per texel when a texture is copied to a buffer. Depth/stencil textures give up their depth only. */
     private fun readbackTexelSize(texture: GpuTexture): Int {
         val format = texture.format

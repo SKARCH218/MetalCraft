@@ -55,6 +55,7 @@ internal object Mcn {
     @JvmField val copyBufferToTexture = bind("mcn_copy_buffer_to_texture", L, L, L, I, I, I, L, I, I, I, I)
     @JvmField val copyTextureToBuffer = bind("mcn_copy_texture_to_buffer", L, L, I, I, I, I, I, L, L, I)
     @JvmField val copyTexture = bind("mcn_copy_texture", L, L, L, I, I, I, I, I, I, I)
+    @JvmField val generateMipmaps = bind("mcn_generate_mipmaps", L, L)
     @JvmField val clearTextures = bind("mcn_clear_textures", L, L, F, F, F, F, L, D, I)
 
     @JvmField val upscalerCreate = bind("mcn_upscaler_create", L, I, I, I, I, I, A)

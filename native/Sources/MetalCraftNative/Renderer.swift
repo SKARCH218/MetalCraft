@@ -904,6 +904,16 @@ public func mcn_copy_texture(
     }
 }
 
+/// Fills the smaller mip levels of a texture from its base level.
+@_cdecl("mcn_generate_mipmaps")
+public func mcn_generate_mipmaps(_ handle: Int, _ texture: Int) -> Int32 {
+    guarded {
+        let target: MTLTexture = object(texture)
+        guard target.mipmapLevelCount > 1 else { return }
+        try context(handle).blitEncoder().generateMipmaps(for: target)
+    }
+}
+
 /// Clears one mip level of a colour texture (0 to skip) and/or a depth texture (0 to skip).
 @_cdecl("mcn_clear_textures")
 public func mcn_clear_textures(
