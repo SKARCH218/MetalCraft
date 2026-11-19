@@ -56,6 +56,9 @@ internal class ShaderPack private constructor(val id: String, private val root: 
     fun converted(dimension: String): ConvertedSpec = convertedSpecs.getOrPut(dimension) { ConvertedSpec(manifest, dimension) }
 
     val displayName: String = manifest.get("name")?.asString ?: id
+
+    /** The pack's folder (inside the mod for a built-in pack). */
+    val folder: Path get() = root
     val includes: List<String> = json.getAsJsonArray("include")?.map { it.asString } ?: emptyList()
     val buffers: Map<String, BufferSpec>
     val gbufferTargets: List<String> = json.getAsJsonArray("gbuffers")?.map { it.asString } ?: emptyList()
@@ -156,7 +159,8 @@ internal class ShaderPack private constructor(val id: String, private val root: 
             val builtIn = FabricLoader.getInstance().getModContainer(MetalCraft.MOD_ID).flatMap { it.findPath(BUILT_IN_ROOT) }.orElse(null)
             // Development runs point this at the project's own shaderpacks folder.
             val extra = System.getProperty("metalcraft.shaderpacks.dir")?.takeIf { it.isNotBlank() }?.let(Path::of)
-            for (root in listOfNotNull(builtIn, FabricLoader.getInstance().gameDir.resolve("shaderpacks"), extra)) {
+            // The game's pack folder first: a pack there stands in for one of the same name inside the mod.
+            for (root in listOfNotNull(FabricLoader.getInstance().gameDir.resolve("shaderpacks"), extra, builtIn)) {
                 if (!Files.isDirectory(root)) continue
                 val folders = try {
                     Files.list(root).use { it.sorted().toList() }

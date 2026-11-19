@@ -424,6 +424,30 @@ private class Harness(private val context: ClientGameTestContext) {
                 context.waitForScreen(net.minecraft.client.gui.screens.options.VideoSettingsScreen::class.java)
                 capture("gui_video", OVERWORLD, pixelCompare = false, benchmarkable = false)
                 closeScreen()
+                // The selected pack's own options, and one of them changed: the pack is converted again and
+                // reloaded (needs build/libs/metalcraft-porter.jar; skipped for packs without options).
+                val settings = dev.skarch.metalcraft.config.ShaderSettingsScreen
+                val hasOptions = context.computeOnClient<Boolean, RuntimeException> {
+                    val screen = settings.packOptionsScreen(dev.skarch.metalcraft.config.ShaderSettingsScreen(null))
+                    if (screen != null) it.gui.setScreen(screen)
+                    screen != null
+                }
+                if (hasOptions) {
+                    context.waitTicks(5)
+                    capture("gui_pack_options", OVERWORLD, pixelCompare = false, benchmarkable = false)
+                    closeScreen()
+                    val option = System.getProperty("metalcraft.test.packOption")
+                    if (option != null) {
+                        for (value in arrayOf(System.getProperty("metalcraft.test.packOptionValue"), null)) {
+                            val started = context.computeOnClient<Boolean, RuntimeException> { settings.applyPackOption(option, value) }
+                            if (!started) break
+                            // A failed conversion leaves its message on screen: the wait then times out and fails the run.
+                            context.waitFor({ client -> client.gui.screen() == null && client.gui.overlay() == null }, CHUNK_TIMEOUT_TICKS)
+                            context.waitTicks(SETTLE_TICKS)
+                            if (value != null) capture("pack_option_changed", OVERWORLD, pixelCompare = false, benchmarkable = false)
+                        }
+                    }
+                }
                 // Closing the settings screen applies a changed MetalFX mode without a restart.
                 if (System.getProperty("metalcraft.upscale") == null) {
                     val config = dev.skarch.metalcraft.config.MetalCraftConfig

@@ -175,6 +175,9 @@ private val SWITCH_LINE = Regex("""^(\s*)(//\s*)?#define\s+(\w+)(\s*(?://.*)?)$"
 private val SIZE_PROPERTY = Regex("""size\.buffer\.(colortex\d+|gcolor|gdepth|gnormal|composite|gaux[1-4])\s*=\s*([\d.]+)\s+([\d.]+)""")
 private val MIPMAP_CONSTANT = Regex("""const\s+bool\s+(\w+)MipmapEnabled\s*=\s*true\s*;""")
 private val ALPHA_TEST_PROPERTY = Regex("""alphaTest\.(\w+)\s*=\s*(?:off|false|GREATER\s+([\d.]+)).*""", RegexOption.IGNORE_CASE)
+private val CONST_OPTION_LINE = Regex("""^(\s*const\s+\w+\s+(\w+)\s*=\s*)([^;\s]+)(\s*;\s*//\s*\[.*)$""")
+private val SCREEN_PROPERTY = Regex("""screen((?:\.[\w.]+)?)\s*=\s*(.*)""")
+private val PROFILE_PROPERTY = Regex("""profile\.(\w+)\s*=\s*(.*)""")
 private val WORD = Regex("""\b[A-Za-z_]\w*\b""")
 private val OPTION_DEFINE = Regex("""\s*(//)?\s*#define\s+(\w+)[ \t]*([^\s/]*).*""")
 private val OPTION_FILES = setOf("glsl", "fsh", "vsh", "csh", "gsh", "h", "inc", "settings", "frag", "vert")
@@ -205,7 +208,7 @@ fun main(args: Array<String>) {
         ?: Converter::class.java.getResourceAsStream("/ports/${output.name}.json")?.use { JsonParser.parseString(String(it.readAllBytes())).asJsonObject }
         ?: JsonObject()
     println("Converting $source -> ${output.toAbsolutePath().normalize()}")
-    val converter = Converter(source, output.toAbsolutePath().normalize(), port)
+    val converter = Converter(source, output.toAbsolutePath().normalize(), port, given)
     exitProcess(if (converter.run()) 0 else 1)
 }
 
@@ -232,7 +235,7 @@ private fun unzip(zip: Path): Path {
     return target
 }
 
-private class Converter(private val source: Path, private val output: Path, private val port: JsonObject) {
+private class Converter(private val source: Path, private val output: Path, private val port: JsonObject, private val origin: Path = source) {
     private val uniformTypes = LinkedHashMap<String, String>()
     /** The uniforms the program being assembled declares itself. */
     private var assembling = HashSet<String>()
@@ -324,6 +327,7 @@ private class Converter(private val source: Path, private val output: Path, priv
             }
         })
         Files.writeString(output.resolve("pack.json"), GsonBuilder().setPrettyPrinting().create().toJson(manifest))
+        Files.writeString(output.resolve("options.json"), GsonBuilder().setPrettyPrinting().create().toJson(optionsManifest()))
         println("converted ${total - failures} of $total programs, ${uniforms.members.size} uniforms (${uniforms.size} bytes)")
         if (skipped.isNotEmpty()) println("not handled yet: $skipped")
         return failures == 0
@@ -939,9 +943,118 @@ private class Converter(private val source: Path, private val output: Path, priv
                 else -> line
             }
         }
+        // const float shadowDistance = 192.0; //[...]: an option too.
+        CONST_OPTION_LINE.find(line)?.let { constant ->
+            val wanted = options.get(constant.groupValues[2]) ?: return line
+            return constant.groupValues[1] + wanted.asString + constant.groupValues[4]
+        }
         val match = OPTION_LINE.find(line) ?: return line
         val value = options.get(match.groupValues[2]) ?: return line
         return match.groupValues[1] + value.asString + match.groupValues[4]
+    }
+
+    /**
+     * What the game's pack options screen shows (`options.json` next to `pack.json`): the pack's options with
+     * their defaults and choices, its screens, profiles and labels, where the pack came from and the port
+     * settings used, so that the pack can be converted again with other values.
+     */
+    private fun optionsManifest(): JsonObject {
+        val screens = JsonObject()
+        val profiles = JsonObject()
+        val referenced = HashSet<String>()
+        var columns = 2
+        val properties = source.resolve("shaders.properties")
+        if (properties.exists()) {
+            val joined = Files.readString(properties).replace(Regex("""\\[ \t]*\r?\n(?![ \t]*#)\s*"""), " ").replace(Regex("""\\[ \t]*\r?\n"""), "\n")
+            for (line in activeLines(joined.lines(), HashMap(packDefines))) {
+                val screen = SCREEN_PROPERTY.matchEntire(line)
+                if (screen != null) {
+                    val items = screen.groupValues[2].trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+                    if (screen.groupValues[1] == ".columns") {
+                        columns = items.firstOrNull()?.toIntOrNull() ?: 2
+                    } else if (!screen.groupValues[1].endsWith(".columns")) {
+                        screens.add(screen.groupValues[1].removePrefix("."), JsonArray().also { array -> items.forEach(array::add) })
+                        referenced.addAll(items)
+                    }
+                    continue
+                }
+                val profile = PROFILE_PROPERTY.matchEntire(line) ?: continue
+                val values = JsonObject()
+                for (item in profile.groupValues[2].trim().split(Regex("\\s+"))) {
+                    when {
+                        item.isEmpty() || item.startsWith("profile.") -> {}
+                        item.startsWith("!") -> values.addProperty(item.substring(1), "false")
+                        '=' in item -> values.addProperty(item.substringBefore('='), item.substringAfter('='))
+                        else -> values.addProperty(item, "true")
+                    }
+                }
+                profiles.add(profile.groupValues[1], values)
+                referenced.addAll(values.keySet())
+            }
+        }
+
+        val options = JsonObject()
+        Files.walk(source).use { files ->
+            for (file in files.sorted()) {
+                if (!Files.isRegularFile(file) || file.name.substringAfterLast('.') !in OPTION_FILES) continue
+                val lines = try { Files.readAllLines(file) } catch (e: java.io.IOException) { continue }
+                for (line in lines) {
+                    val value = OPTION_LINE.find(line) ?: CONST_OPTION_LINE.find(line)
+                    if (value != null) {
+                        val name = value.groupValues[2]
+                        if (options.has(name)) continue
+                        options.add(name, JsonObject().also {
+                            it.addProperty("type", "choice")
+                            it.addProperty("default", value.groupValues[3])
+                            it.add("values", JsonArray().also { array ->
+                                value.groupValues[4].substringAfter('[').substringBefore(']').trim().split(Regex("\\s+")).filter { v -> v.isNotEmpty() }.forEach(array::add)
+                            })
+                        })
+                        continue
+                    }
+                    val switch = SWITCH_LINE.matchEntire(line) ?: continue
+                    val name = switch.groupValues[3]
+                    // Packs define many names that are not options: only what a screen or a profile lists counts.
+                    if (name !in referenced || options.has(name)) continue
+                    options.add(name, JsonObject().also {
+                        it.addProperty("type", "bool")
+                        it.addProperty("default", if (switch.groupValues[2].isEmpty()) "true" else "false")
+                    })
+                }
+            }
+        }
+
+        val lang = JsonObject()
+        val folder = source.resolve("lang")
+        if (Files.isDirectory(folder)) {
+            Files.list(folder).use { files ->
+                for (file in files) {
+                    val code = file.name.substringBeforeLast('.').lowercase()
+                    if (code != "en_us" && code != "ko_kr") continue
+                    val labels = JsonObject()
+                    val lines = try { Files.readAllLines(file) } catch (e: java.io.IOException) { continue }
+                    for (line in lines) {
+                        val separator = line.indexOf('=')
+                        if (separator <= 0 || line.startsWith("#")) continue
+                        val key = line.substring(0, separator).trim()
+                        if (key.startsWith("option.") || key.startsWith("value.") || key.startsWith("screen.") || key.startsWith("profile.")) {
+                            labels.addProperty(key, line.substring(separator + 1).trim())
+                        }
+                    }
+                    lang.add(code, labels)
+                }
+            }
+        }
+
+        val result = JsonObject()
+        result.addProperty("source", origin.toAbsolutePath().normalize().toString())
+        result.add("port", port)
+        result.addProperty("columns", columns)
+        result.add("options", options)
+        result.add("screens", screens)
+        result.add("profiles", profiles)
+        result.add("lang", lang)
+        return result
     }
 
     private fun inline(file: Path, into: StringBuilder, depth: Int) {

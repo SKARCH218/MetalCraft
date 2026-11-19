@@ -48,9 +48,12 @@ class ShaderSettingsScreen(private val lastScreen: Screen?) : Screen(Component.t
         )
         val buttons = footer.addChild(LinearLayout.horizontal().spacing(8))
         buttons.addChild(
-            Button.builder(Component.translatable("metalcraft.shaders.open_folder")) { openFolder() }.width(BUTTON_WIDTH).build(),
+            Button.builder(Component.translatable("metalcraft.shaders.pack_options")) { openPackOptions() }.width(SMALL_BUTTON_WIDTH).build(),
         )
-        buttons.addChild(Button.builder(CommonComponents.GUI_DONE) { onClose() }.width(BUTTON_WIDTH).build())
+        buttons.addChild(
+            Button.builder(Component.translatable("metalcraft.shaders.open_folder")) { openFolder() }.width(BUTTON_WIDTH + 20).build(),
+        )
+        buttons.addChild(Button.builder(CommonComponents.GUI_DONE) { onClose() }.width(SMALL_BUTTON_WIDTH).build())
 
         layout.visitWidgets { addRenderableWidget(it) }
         repositionElements()
@@ -68,6 +71,23 @@ class ShaderSettingsScreen(private val lastScreen: Screen?) : Screen(Component.t
             dev.skarch.metalcraft.upscale.Upscaler.reconfigure()
             minecraft.reloadResourcePacks()
         }
+    }
+
+    /** The selected pack's own settings, if it was converted with them. */
+    private fun openPackOptions() {
+        val id = ShaderPipeline.selectedId()
+        val folder = ShaderPipeline.packFolder(id)
+        val options = if (folder == null) null else PackOptions.load(id, folder)
+        if (options == null) {
+            minecraft.gui.setScreen(
+                net.minecraft.client.gui.screens.AlertScreen(
+                    { minecraft.gui.setScreen(this) }, Component.translatable("metalcraft.shaders.pack_options"),
+                    Component.translatable("metalcraft.pack_options.none"),
+                ),
+            )
+            return
+        }
+        minecraft.gui.setScreen(PackOptionsScreen(this, options, "", Component.translatable("metalcraft.pack_options.title", id)))
     }
 
     private fun openFolder() {
@@ -128,13 +148,38 @@ class ShaderSettingsScreen(private val lastScreen: Screen?) : Screen(Component.t
         }
     }
 
-    private companion object {
-        const val OFF = "off"
-        const val FOOTER_HEIGHT = 84
-        const val BUTTON_WIDTH = 150
-        const val MIN_SCALE = 50
-        const val SCALE_STEP = 5
-        const val NOTE_COLOR = -4539718
-        val UPSCALE_MODES = listOf("off", "spatial", "temporal")
+    companion object {
+        /** The settings screen of the selected pack's own options, or null when it has none. */
+        @JvmStatic
+        fun packOptionsScreen(parent: Screen): Screen? {
+            val id = ShaderPipeline.selectedId()
+            val options = ShaderPipeline.packFolder(id)?.let { PackOptions.load(id, it) } ?: return null
+            return PackOptionsScreen(parent, options, "", Component.translatable("metalcraft.pack_options.title", id))
+        }
+
+        /**
+         * Sets one option of the selected pack ([value] null for its default) and converts the pack again, as
+         * leaving the options screen does. False when the pack has no such option.
+         */
+        @JvmStatic
+        fun applyPackOption(name: String, value: String?): Boolean {
+            val id = ShaderPipeline.selectedId()
+            val options = ShaderPipeline.packFolder(id)?.let { PackOptions.load(id, it) } ?: return false
+            val option = options.options[name] ?: return false
+            options.set(name, value ?: option.default)
+            if (!options.changed()) return true
+            PackConversion.start(options)
+            Minecraft.getInstance().gui.setScreen(ConvertingScreen(null))
+            return true
+        }
+
+        private const val OFF = "off"
+        private const val FOOTER_HEIGHT = 84
+        private const val BUTTON_WIDTH = 150
+        private const val SMALL_BUTTON_WIDTH = 100
+        private const val MIN_SCALE = 50
+        private const val SCALE_STEP = 5
+        private const val NOTE_COLOR = -4539718
+        private val UPSCALE_MODES = listOf("off", "spatial", "temporal")
     }
 }

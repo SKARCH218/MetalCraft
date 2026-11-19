@@ -157,6 +157,9 @@ object ShaderPipeline {
         return packs.map { it.id to it.displayName }
     }
 
+    /** The folder of the pack with this name, or null. */
+    fun packFolder(id: String): java.nio.file.Path? = packs.firstOrNull { it.id == id }?.folder
+
     /** Switches to the pack with this folder name ("off" for none) and remembers it in the config. */
     fun selectPack(id: String) {
         if (id == selected) return

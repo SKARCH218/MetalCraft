@@ -15,5 +15,13 @@
   "metalcraft.shaders.button": "쉐이더...",
   "key.metalcraft.shader_settings": "쉐이더 설정",
   "metalcraft.shaders.active": "현재 적용 중인 MetalFX: %s",
-  "metalcraft.graphics_api.locked": "MetalCraft는 Metal로 렌더링합니다. 게임 기본 렌더러를 쓰려면 config/metalcraft.properties에서 renderer=vanilla로 바꾸세요."
+  "metalcraft.graphics_api.locked": "MetalCraft는 Metal로 렌더링합니다. 게임 기본 렌더러를 쓰려면 config/metalcraft.properties에서 renderer=vanilla로 바꾸세요.",
+  "metalcraft.shaders.pack_options": "팩 옵션...",
+  "metalcraft.pack_options.title": "%s 옵션",
+  "metalcraft.pack_options.reset": "기본값으로 되돌리기",
+  "metalcraft.pack_options.profile": "프로필: %s",
+  "metalcraft.pack_options.custom": "사용자 지정",
+  "metalcraft.pack_options.converting": "새 옵션으로 쉐이더팩을 변환하는 중...",
+  "metalcraft.pack_options.failed": "팩을 변환하지 못했습니다: %s",
+  "metalcraft.pack_options.none": "이 팩에는 여기서 바꿀 수 있는 옵션이 없습니다. 팩 변환기(metalcraft-porter.jar)로 만든 팩만 옵션을 보여 줍니다."
 }

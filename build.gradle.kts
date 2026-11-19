@@ -39,6 +39,7 @@ loom {
             vmArg("--enable-native-access=ALL-UNNAMED")
             // Ported shader packs live in the project folder (git-ignored), not in the game folder.
             vmArg("-Dmetalcraft.shaderpacks.dir=${layout.projectDirectory.dir("shaderpacks").asFile}")
+            vmArg("-Dmetalcraft.porter=${layout.buildDirectory.file("libs/metalcraft-porter.jar").get().asFile}")
         }
     }
 }
@@ -67,6 +68,8 @@ val harnessProperties = listOf(
     "metalcraft.test.renderDistance",
     "metalcraft.test.createLayers",
     "metalcraft.test.fov",
+    "metalcraft.test.packOption",
+    "metalcraft.test.packOptionValue",
     "metalcraft.test.height",
     "metalcraft.test.worldCache",
     "metalcraft.debug.timing",
@@ -83,6 +86,7 @@ loom {
         named("clientGameTest") {
             vmArg("--enable-native-access=ALL-UNNAMED")
             vmArg("-Dmetalcraft.shaderpacks.dir=${layout.projectDirectory.dir("shaderpacks").asFile}")
+            vmArg("-Dmetalcraft.porter=${layout.buildDirectory.file("libs/metalcraft-porter.jar").get().asFile}")
             // The gametest API pins the game framebuffer to these values regardless of the real window size.
             // -Pmetalcraft.test.width / height override the size, e.g. to measure at a display's full resolution.
             programArgs(

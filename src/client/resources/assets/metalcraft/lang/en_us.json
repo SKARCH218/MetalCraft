@@ -15,5 +15,13 @@
   "metalcraft.shaders.button": "Shaders...",
   "key.metalcraft.shader_settings": "Shader Settings",
   "metalcraft.shaders.active": "MetalFX in use now: %s",
-  "metalcraft.graphics_api.locked": "MetalCraft renders with Metal. To use Minecraft's own renderer, set renderer=vanilla in config/metalcraft.properties."
+  "metalcraft.graphics_api.locked": "MetalCraft renders with Metal. To use Minecraft's own renderer, set renderer=vanilla in config/metalcraft.properties.",
+  "metalcraft.shaders.pack_options": "Pack Options...",
+  "metalcraft.pack_options.title": "Options of %s",
+  "metalcraft.pack_options.reset": "Reset to Defaults",
+  "metalcraft.pack_options.profile": "Profile: %s",
+  "metalcraft.pack_options.custom": "Custom",
+  "metalcraft.pack_options.converting": "Converting the shader pack with its new options...",
+  "metalcraft.pack_options.failed": "The pack could not be converted: %s",
+  "metalcraft.pack_options.none": "This pack has no options to change here. Packs made with the pack converter (metalcraft-porter.jar) list theirs."
 }
