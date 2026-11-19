@@ -513,7 +513,19 @@ internal class ConvertedPack(
         val formats = attachmentFormats
         val masks = IntArray(formats.size) { if (attachments[it] in program.targets) WRITE_ALL else 0 }
         var blend = 0
-        for (target in blendTargets) if (target in program.targets) blend = blend or (1 shl attachments.indexOf(target))
+        var functions: Array<IntArray?>? = null
+        if (program.blendOff || program.blendFunctions.isNotEmpty()) {
+            // The pack decides: only the buffers it gives a function blend, each with its own.
+            functions = arrayOfNulls(formats.size)
+            for (i in formats.indices) {
+                if (attachments[i] !in program.targets) continue
+                val factors = program.blendFunctions[attachments[i]] ?: program.blendFunctions[-1] ?: continue
+                blend = blend or (1 shl i)
+                functions[i] = intArrayOf(0, 0, factors[0], factors[1], factors[2], factors[3])
+            }
+        } else {
+            for (target in blendTargets) if (target in program.targets) blend = blend or (1 shl attachments.indexOf(target))
+        }
         val buffers = if (withGlobals) {
             entries(slots, PACK_UNIFORMS_ENTRY, DRAW_UNIFORMS_ENTRY, geometryBlock, GLOBALS_ENTRY)
         } else {
@@ -521,7 +533,7 @@ internal class ConvertedPack(
         }
         val compiled = PackProgram(
             device, "${pack.id}/$label", shareSamplers(pack.read(program.vertex), program, slots), shareSamplers(pack.read(program.fragment), program, slots), buffers, format,
-            formats, masks, blend, depthCompare, depthWrite, if (cull) 1 else 0, blendFunction, fastMath = true,
+            formats, masks, blend, depthCompare, depthWrite, if (cull) 1 else 0, blendFunction, fastMath = true, blendFunctions = functions,
         )
         return Program(program, register(compiled, DEPTH_FORMAT), slots, "gbuffers")
     }
@@ -601,10 +613,18 @@ internal class ConvertedPack(
         val formats = IntArray(program.targets.size) {
             MetalFormats.code(if (program.name == FINAL) GpuFormat.RGBA8_UNORM else color(program.targets[it]).spec.format)
         }
+        // A full-screen pass blends only where the pack asks for it.
+        var passBlend = 0
+        val passFunctions = arrayOfNulls<IntArray>(formats.size)
+        for (i in formats.indices) {
+            val factors = program.blendFunctions[program.targets[i]] ?: program.blendFunctions[-1] ?: continue
+            passBlend = passBlend or (1 shl i)
+            passFunctions[i] = intArrayOf(0, 0, factors[0], factors[1], factors[2], factors[3])
+        }
         val compiled = PackProgram(
             device, "${pack.id}/${program.name}", shareSamplers(pack.read(program.vertex), program, slots), shareSamplers(pack.read(program.fragment), program, slots),
             entries(slots, PACK_UNIFORMS_ENTRY), null,
-            formats, IntArray(formats.size) { WRITE_ALL }, 0, -1, false, 0, fastMath = true,
+            formats, IntArray(formats.size) { WRITE_ALL }, passBlend, -1, false, 0, fastMath = true, blendFunctions = passFunctions,
         )
         return Program(program, register(compiled, MetalFormats.NO_FORMAT), slots, stage)
     }
@@ -697,8 +717,8 @@ internal class ConvertedPack(
         height = newHeight
         for (color in colors) {
             if (color == null) continue
-            val w = maxOf(1, (newWidth * color.spec.scale).toInt())
-            val h = maxOf(1, (newHeight * color.spec.scale).toInt())
+            val w = if (color.spec.width > 0) color.spec.width else maxOf(1, (newWidth * color.spec.scale).toInt())
+            val h = if (color.spec.height > 0) color.spec.height else maxOf(1, (newHeight * color.spec.scaleY).toInt())
             color.texture = colorTexture("colortex${color.spec.index}", color.spec.format, w, h)
             color.view = device.createTextureView(color.texture!!) as MetalTextureView
             // Buffers the pack does not clear keep their content between frames: start them from zero.
@@ -1026,6 +1046,8 @@ internal class ConvertedPack(
         val fog = camera.fogData
         vector("fogColor", fog.color.x, fog.color.y, fog.color.z)
         vector("mc_fogColor", fog.color.x, fog.color.y, fog.color.z, 1f)
+        // Iris sets this per draw; one value for all is right for cut-out textures and harmless for the rest.
+        float("alphaTestRef", 0.1f)
         vector("skyColor", (sky.skyColor shr 16 and 0xFF) / 255f, (sky.skyColor shr 8 and 0xFF) / 255f, (sky.skyColor and 0xFF) / 255f)
         float("fogStart", fog.renderDistanceStart)
         float("fogEnd", fog.renderDistanceEnd)

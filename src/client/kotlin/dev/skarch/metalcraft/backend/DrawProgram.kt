@@ -53,6 +53,8 @@ internal class PackProgram(
     private val blendFunction: IntArray? = null,
     /** Lets Metal's compiler reorder floating point arithmetic: faster, results not bit-exact between programs. */
     fastMath: Boolean = false,
+    /** A blend function of its own for single outputs (same form as [blendFunction]); null entries use that one. */
+    private val blendFunctions: Array<IntArray?>? = null,
 ) : DrawProgram {
     override val primitive: Int = MetalFormats.PRIMITIVE_TRIANGLE
     override val wireframe: Int = 0
@@ -98,7 +100,7 @@ internal class PackProgram(
             layout.add(colorFormats[i])
             layout.add(writeMasks[i])
             layout.add(if (blend) 1 else 0)
-            val function = if (blend) blendFunction ?: STRAIGHT_ALPHA else NO_BLEND
+            val function = if (blend) blendFunctions?.getOrNull(i) ?: blendFunction ?: STRAIGHT_ALPHA else NO_BLEND
             for (value in function) layout.add(value)
         }
         layout.add(depthFormat)

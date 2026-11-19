@@ -166,6 +166,13 @@ private val CONDITION_TOKEN = Regex("""\d+|\w+|&&|\|\||[=!<>]=|[-!<>()]""")
 private val COMPARISONS = setOf("==", "!=", ">=", "<=", ">", "<")
 private val PROGRAM_ENABLED = Regex("""program\.([\w/-]+)\.enabled\s*=\s*(.+)""")
 private val TEXTURE_PROPERTY = Regex("""(texture|customTexture)\.([\w.]+)\s*=\s*(.+)""")
+private val BLEND_PROPERTY = Regex("""blend\.(\w+)(?:\.(colortex\d+|gcolor|gdepth|gnormal|composite|gaux[1-4]))?\s*=\s*(.+)""")
+private val BLEND_FACTORS = mapOf(
+    "ZERO" to 0, "ONE" to 1, "SRC_COLOR" to 2, "ONE_MINUS_SRC_COLOR" to 3, "SRC_ALPHA" to 4, "ONE_MINUS_SRC_ALPHA" to 5,
+    "DST_COLOR" to 6, "ONE_MINUS_DST_COLOR" to 7, "DST_ALPHA" to 8, "ONE_MINUS_DST_ALPHA" to 9, "SRC_ALPHA_SATURATE" to 10,
+)
+private val SWITCH_LINE = Regex("""^(\s*)(//\s*)?#define\s+(\w+)(\s*(?://.*)?)$""")
+private val SIZE_PROPERTY = Regex("""size\.buffer\.(colortex\d+|gcolor|gdepth|gnormal|composite|gaux[1-4])\s*=\s*([\d.]+)\s+([\d.]+)""")
 private val WORD = Regex("""\b[A-Za-z_]\w*\b""")
 private val OPTION_DEFINE = Regex("""\s*(//)?\s*#define\s+(\w+)[ \t]*([^\s/]*).*""")
 private val OPTION_FILES = setOf("glsl", "fsh", "vsh", "csh", "gsh", "h", "inc", "settings", "frag", "vert")
@@ -191,7 +198,10 @@ fun main(args: Array<String>) {
     }
     val packName = given.name.removeSuffix(".zip").lowercase().replace(Regex("§.|[^a-z0-9]+"), "-").trim('-').ifEmpty { "pack" }
     val output = args.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { Path.of(it) } ?: Path.of("shaderpacks", packName)
-    val port = args.getOrNull(2)?.takeIf { it.isNotBlank() }?.let { JsonParser.parseString(Files.readString(Path.of(it))).asJsonObject } ?: JsonObject()
+    // Port settings: the file given, or the ones this tool brings for the pack (by the output folder's name).
+    val port = args.getOrNull(2)?.takeIf { it.isNotBlank() }?.let { JsonParser.parseString(Files.readString(Path.of(it))).asJsonObject }
+        ?: Converter::class.java.getResourceAsStream("/ports/${output.name}.json")?.use { JsonParser.parseString(String(it.readAllBytes())).asJsonObject }
+        ?: JsonObject()
     println("Converting $source -> ${output.toAbsolutePath().normalize()}")
     val converter = Converter(source, output.toAbsolutePath().normalize(), port)
     exitProcess(if (converter.run()) 0 else 1)
@@ -385,6 +395,12 @@ private class Converter(private val source: Path, private val output: Path, priv
                         })
                         entry.add("targets", JsonArray().also { array -> targets.forEach(array::add) })
                         port.getAsJsonObject("blend")?.get(program.name)?.let { entry.add("blend", it) }
+                        packBlend["$folder/${program.name}"]?.let { blend ->
+                            entry.addProperty("blendOff", true)
+                            entry.add("blendFunctions", JsonObject().also { functions ->
+                                for ((buffer, factors) in blend) functions.add(buffer, JsonArray().also { array -> factors.forEach(array::add) })
+                            })
+                        }
                         port.getAsJsonObject("alphaTest")?.get(program.name)?.let { entry.add("alphaTest", it) }
                         manifestPrograms.add(program.name, entry)
                         println("ok      ${program.name}  textures=${translated.textures}  targets=$targets")
@@ -516,6 +532,22 @@ private class Converter(private val source: Path, private val output: Path, priv
         }
         buffers.getOrPut(0) { JsonObject() }
         for (buffer in buffers.values) if (!buffer.has("format")) buffer.addProperty("format", "RGBA8")
+        // size.buffer.<name> = <width> <height>: whole numbers are pixels, fractions are parts of the view.
+        val properties = source.resolve("shaders.properties")
+        if (properties.exists()) {
+            for (line in activeLines(properties, HashMap(packDefines))) {
+                val match = SIZE_PROPERTY.matchEntire(line) ?: continue
+                val buffer = buffers.getOrPut(index(match.groupValues[1])) { JsonObject().also { it.addProperty("format", "RGBA8") } }
+                val (w, h) = match.groupValues[2] to match.groupValues[3]
+                if ('.' in w || '.' in h) {
+                    buffer.addProperty("scale", w.toFloat())
+                    buffer.addProperty("scaleY", h.toFloat())
+                } else {
+                    buffer.addProperty("width", w.toInt())
+                    buffer.addProperty("height", h.toInt())
+                }
+            }
+        }
         val result = JsonObject()
         for ((index, buffer) in buffers) {
             if (index > 15) continue
@@ -608,6 +640,34 @@ private class Converter(private val source: Path, private val output: Path, priv
             for (line in activeLines(file, macros)) {
                 val match = PROGRAM_ENABLED.matchEntire(line) ?: continue
                 if (Condition(match.groupValues[2], macros, flags = true).evaluate() == 0L) result.add(match.groupValues[1])
+            }
+        }
+        result
+    }
+
+    /**
+     * The blending the pack sets per program (`blend.<program> = off` or four factors, `blend.<program>.<buffer>
+     * = ...`): `<folder>/<program>` to buffer index (`all` for every target) and Metal's factor codes. A program
+     * named here blends nothing else.
+     */
+    private val packBlend: Map<String, Map<String, List<Int>>> by lazy {
+        val result = HashMap<String, HashMap<String, List<Int>>>()
+        val file = source.resolve("shaders.properties")
+        if (file.exists()) {
+            for (line in activeLines(file, HashMap(packDefines))) {
+                val match = BLEND_PROPERTY.matchEntire(line) ?: continue
+                val value = match.groupValues[3].trim()
+                for (folder in DIMENSION_FOLDERS) {
+                    val entry = result.getOrPut("$folder/${match.groupValues[1]}") { HashMap() }
+                    if (value.equals("off", ignoreCase = true)) continue
+                    val factors = value.split(Regex("\\s+")).map { BLEND_FACTORS[it.uppercase()] }
+                    if (factors.size != 4 || factors.any { it == null }) {
+                        println("warning: blend setting not understood: $line")
+                        continue
+                    }
+                    val buffer = match.groupValues[2].ifEmpty { "all" }
+                    entry[if (buffer == "all") buffer else (LEGACY_BUFFERS[buffer] ?: buffer.removePrefix("colortex").toInt()).toString()] = factors.map { it!! }
+                }
             }
         }
         result
@@ -835,6 +895,15 @@ private class Converter(private val source: Path, private val output: Path, priv
      */
     private fun option(line: String): String {
         val options = port.getAsJsonObject("options") ?: return line
+        // An on/off option is a `#define NAME` line, commented out when off.
+        SWITCH_LINE.matchEntire(line)?.let { switch ->
+            val wanted = options.get(switch.groupValues[3])?.asString ?: return line
+            return when (wanted) {
+                "true" -> switch.groupValues[1] + "#define " + switch.groupValues[3] + switch.groupValues[4]
+                "false" -> switch.groupValues[1] + "//#define " + switch.groupValues[3] + switch.groupValues[4]
+                else -> line
+            }
+        }
         val match = OPTION_LINE.find(line) ?: return line
         val value = options.get(match.groupValues[2]) ?: return line
         return match.groupValues[1] + value.asString + match.groupValues[4]

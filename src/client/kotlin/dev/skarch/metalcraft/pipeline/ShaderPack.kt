@@ -191,12 +191,20 @@ internal class ConvertedSpec(json: JsonObject, dimension: String) {
     // What differs between dimensions. A pack without programs for one uses those of the Overworld.
     private val part: JsonObject = json.getAsJsonObject("dimensions").let { it.getAsJsonObject(dimension) ?: it.getAsJsonObject("world0") }
 
-    class Buffer(val index: Int, val format: GpuFormat, val clear: Boolean, val scale: Float)
+    /** [scale] and [scaleY] are fractions of the view; [width] and [height], when above zero, a fixed size instead. */
+    class Buffer(
+        val index: Int, val format: GpuFormat, val clear: Boolean, val scale: Float,
+        val scaleY: Float = scale, val width: Int = 0, val height: Int = 0,
+    )
     /** [volume]: the program samples it as a sampler3D. */
     class Texture(val name: String, val compare: Boolean, val volume: Boolean)
     class Program(
         val name: String, val kind: String, val vertex: String, val fragment: String, val textures: List<Texture>,
         val targets: IntArray, val blend: IntArray, val alphaTest: Float,
+        /** The pack sets this program's blending itself (`blend.<program>` in shaders.properties): nothing blends but [blendFunctions]. */
+        val blendOff: Boolean = false,
+        /** Buffer (or -1 for every target) to source and destination factors for colour and alpha, as Metal codes. */
+        val blendFunctions: Map<Int, IntArray> = emptyMap(),
     )
     class Uniform(val name: String, val type: String, val offset: Int)
     /**
@@ -211,7 +219,11 @@ internal class ConvertedSpec(json: JsonObject, dimension: String) {
     val buffers: Map<Int, Buffer> = json.getAsJsonObject("buffers").entrySet().associate { (name, value) ->
         val index = name.removePrefix("colortex").toInt()
         val buffer = value.asJsonObject
-        index to Buffer(index, format(buffer.get("format").asString), buffer.get("clear")?.asBoolean ?: true, buffer.get("scale")?.asFloat ?: 1f)
+        val scale = buffer.get("scale")?.asFloat ?: 1f
+        index to Buffer(
+            index, format(buffer.get("format").asString), buffer.get("clear")?.asBoolean ?: true, scale,
+            buffer.get("scaleY")?.asFloat ?: scale, buffer.get("width")?.asInt ?: 0, buffer.get("height")?.asInt ?: 0,
+        )
     }
     val gbuffers: IntArray = part.getAsJsonArray("gbuffers").map { it.asInt }.toIntArray()
     /** The pack's colortex0 is the first attachment of the world passes, in place of the game image. */
@@ -250,6 +262,10 @@ internal class ConvertedSpec(json: JsonObject, dimension: String) {
             program.getAsJsonArray("targets").map { it.asInt }.toIntArray(),
             program.getAsJsonArray("blend")?.map { it.asInt }?.toIntArray() ?: IntArray(0),
             program.get("alphaTest")?.asFloat ?: -1f,
+            program.get("blendOff")?.asBoolean ?: false,
+            program.getAsJsonObject("blendFunctions")?.entrySet()?.associate { (buffer, factors) ->
+                (buffer.toIntOrNull() ?: -1) to factors.asJsonArray.map { it.asInt }.toIntArray()
+            } ?: emptyMap(),
         )
     }
     /** Whether the pack wants ambient occlusion in the alpha of terrain colours instead of multiplied in. */
