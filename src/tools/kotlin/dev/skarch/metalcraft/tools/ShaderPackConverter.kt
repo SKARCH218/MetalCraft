@@ -575,7 +575,9 @@ private class Converter(private val source: Path, private val output: Path, priv
         if (!file.exists()) return null
         val result = StringBuilder()
         val macros = HashMap(packDefines)
-        for (line in activeLines(file, macros)) {
+        // A trailing backslash continues an entry on the next line.
+        val joined = Files.readString(file).replace(Regex("""\\[ \t]*\r?\n(?![ \t]*#)\s*"""), " ").replace(Regex("""\\[ \t]*\r?\n"""), "\n")
+        for (line in activeLines(joined.lines(), macros)) {
             if (!line.startsWith(prefix)) continue
             var text = line
             // Macros may expand to other macros (Photon's tag lists).

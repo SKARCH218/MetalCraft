@@ -486,7 +486,8 @@ internal class ConvertedPack(
         if (texture.volume && image == null) throw IllegalArgumentException("${program.name} reads the volume '${texture.name}', which the pack has no image for")
         when {
             image != null -> Slot(texture.name, SOURCE_IMAGE, 0, false, image)
-            name in ATLAS_NAMES -> Slot("Sampler0", SOURCE_GAME, 0, false, null)
+            // While geometry is drawn the first texture unit holds the block atlas, also under its old name.
+            name in ATLAS_NAMES || ((stage == "gbuffers" || stage == "shadow") && texture.name == "gcolor") -> Slot("Sampler0", SOURCE_GAME, 0, false, null)
             // A world program cannot read an image it is drawing into. It reads a copy made once the opaque
             // world and the deferred passes are done, which is what translucent things want to see behind them.
             stage == "gbuffers" && name.startsWith("colortex") && name.removePrefix("colortex").toInt() in program.targets -> {
