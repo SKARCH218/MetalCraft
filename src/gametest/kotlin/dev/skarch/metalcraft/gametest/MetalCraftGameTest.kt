@@ -386,6 +386,19 @@ private class Harness(private val context: ClientGameTestContext) {
             world.connection.waitForClientboundPackets()
             context.waitTicks(SETTLE_TICKS)
             if (selected("entities")) capture("entities", OVERWORLD)
+            // Entity and player shadows (shader packs): a low morning sun behind the player, looking down at
+            // the ground in front, where the player's own shadow falls. Looked at by eye.
+            if (selected("entity_shadows")) {
+                world.server.runCommand("time set 1500")
+                teleport(world, OVERWORLD, Viewpoint(0.5, ground + 1.0, 0.5, 90f, 35f))
+                waitForWorldReady()
+                context.waitTicks(SETTLE_TICKS)
+                capture("entity_shadows", OVERWORLD, pixelCompare = false)
+                world.server.runCommand("time set 6000")
+                teleport(world, OVERWORLD, view)
+                waitForWorldReady()
+                context.waitTicks(SETTLE_TICKS)
+            }
 
             for (item in arrayOf("diamond_sword", "oak_planks 64", "torch 32", "golden_apple 5", "water_bucket")) {
                 world.server.runCommand("give @a minecraft:$item")
@@ -700,7 +713,7 @@ private class Harness(private val context: ClientGameTestContext) {
         const val NETHER = "minecraft:the_nether"
 
         val NORMAL_WORLD_SCENES = listOf("plains_day", "ocean", "underwater", "night_torches", "held_light", "cave", "nether")
-        val FLAT_WORLD_SCENES = listOf("create", "entities", "gui_inventory", "gui_shaders", "after_reload", "gui_chat", "entities_fx", "gui_f3")
+        val FLAT_WORLD_SCENES = listOf("create", "entities", "entity_shadows", "gui_inventory", "gui_shaders", "after_reload", "gui_chat", "entities_fx", "gui_f3")
         val ALL_SCENES = (NORMAL_WORLD_SCENES + FLAT_WORLD_SCENES).toSet()
 
         fun fmt(value: Double): String = String.format(Locale.ROOT, "%.2f", value)

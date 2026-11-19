@@ -16,6 +16,7 @@ object MetalCraftConfig {
     private const val SHADER_PACK = "shaderpack"
     private const val UPSCALE = "upscale"
     private const val RENDER_SCALE = "render_scale"
+    private const val ENTITY_SHADOWS = "entity_shadows"
 
     private val file: Path = FabricLoader.getInstance().configDir.resolve(FILE_NAME)
 
@@ -33,6 +34,10 @@ object MetalCraftConfig {
     /** Size of the image the world is rendered at, in percent of the window (50 to 100), when upscaling. */
     @Volatile
     var renderScale: Int
+
+    /** Whether the player and other entities cast shadows in shader packs (as simple boxes). */
+    @Volatile
+    var entityShadows: Boolean
 
     init {
         val values = HashMap<String, String>()
@@ -56,6 +61,7 @@ object MetalCraftConfig {
         shaderPack = values.getOrDefault(SHADER_PACK, "off")
         upscale = values.getOrDefault(UPSCALE, "off").lowercase()
         renderScale = values[RENDER_SCALE]?.toIntOrNull()?.coerceIn(50, 100) ?: 75
+        entityShadows = values.getOrDefault(ENTITY_SHADOWS, "true").lowercase() != "false"
         if (!Files.isRegularFile(file)) save()
     }
 
@@ -73,7 +79,9 @@ object MetalCraftConfig {
                     "# upscale: off, spatial or temporal (MetalFX). render_scale: 50 to 100, the size the world is drawn at\n" +
                     "# in percent of the window before it is enlarged. Both apply at the next start.\n" +
                     "$UPSCALE=$upscale\n" +
-                    "$RENDER_SCALE=$renderScale\n",
+                    "$RENDER_SCALE=$renderScale\n" +
+                    "# entity_shadows: true or false. With a shader pack, the player and other entities cast shadows (as boxes).\n" +
+                    "$ENTITY_SHADOWS=$entityShadows\n",
             )
         } catch (e: IOException) {
             LOGGER.warn("Could not write {}", file, e)

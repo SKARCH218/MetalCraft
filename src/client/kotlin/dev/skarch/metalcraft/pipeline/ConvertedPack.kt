@@ -14,6 +14,7 @@ import com.mojang.blaze3d.textures.GpuTexture
 import com.mojang.blaze3d.vertex.DefaultVertexFormat
 import com.mojang.blaze3d.vertex.VertexFormat
 import dev.skarch.metalcraft.MetalCraft.LOGGER
+import dev.skarch.metalcraft.config.MetalCraftConfig
 import dev.skarch.metalcraft.backend.BindingEntry
 import dev.skarch.metalcraft.backend.MetalDevice
 import dev.skarch.metalcraft.backend.MetalFormats
@@ -158,6 +159,7 @@ internal class ConvertedPack(
     private val depthCopy: PackProgram
     private val debugView: PackProgram?
     private var debugStopped = false
+    private var withCasters = false
 
     private val linear: MetalSampler
     private val nearest: MetalSampler
@@ -184,6 +186,8 @@ internal class ConvertedPack(
     private val shadowColors: Array<MetalTexture>
     private val shadowColorViews: Array<MetalTextureView>
 
+    /** What entities cast into the shadow map. */
+    private val casters = ShadowCasters(device)
     private val drawBuffers = ArrayList<GpuBuffer>()
     private val drawUniforms = HashMap<Float, GpuBufferSlice>()
     private val drawShadow: GpuBufferSlice
@@ -767,6 +771,8 @@ internal class ConvertedPack(
         device.encoder.clearColorTexture(shadowColors[0], clearWhite)
         device.encoder.clearColorTexture(shadowColors[1], clearWhite)
         val sections = ShaderPipeline.shadowSections(minecraft, shadowModelView, spec.shadowDistance, position.x, position.y, position.z, true)
+        withCasters = MetalCraftConfig.entityShadows
+        if (withCasters) casters.update(minecraft, camera, spec.shadowDistance, shadowModelView)
         // Opaque terrain alone first. The second map starts as a copy of that depth and adds the translucent
         // layer on top, which leaves the colours of what is nearest to the light, translucent or not.
         drawShadow(program, sections, shadowDepthView, false)
@@ -788,6 +794,7 @@ internal class ConvertedPack(
             pass.bindTexture("Sampler0", sections.textureView(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST))
             bindTextures(pass, program)
             ShaderPipeline.drawShadowTerrain(pass, sections, translucentOnly)
+            if (withCasters && !translucentOnly) casters.draw(pass)
         } finally {
             device.encoder.submitRenderPass()
         }
@@ -1348,6 +1355,7 @@ internal class ConvertedPack(
         linearRepeat.close()
         shadowCompare.close()
         atlas.close()
+        casters.close()
         for (buffer in drawBuffers) buffer.close()
         drawBuffers.clear()
         // Programs may be bound in the frame being recorded; Metal keeps what a command buffer uses alive.
